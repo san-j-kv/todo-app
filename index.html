@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<title>To Do</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ── icon sprite ─────────────────────────────────────────────── -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-calendar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="4.5" width="18" height="16" rx="2.5"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>
+  </symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="9"/><path d="M12 7v5.2l3.2 2"/>
+  </symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M17 2.5 20.5 6 17 9.5"/><path d="M3.5 12V10a4 4 0 0 1 4-4h13"/>
+    <path d="m7 21.5-3.5-3.5L7 14.5"/><path d="M20.5 12v2a4 4 0 0 1-4 4h-13"/>
+  </symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 6.5h16M9.5 6.5V4.5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v2"/>
+    <path d="M6.5 6.5 7.4 20a1.5 1.5 0 0 0 1.5 1.4h6.2a1.5 1.5 0 0 0 1.5-1.4l.9-13.5"/>
+    <path d="M10.5 10.5v7M13.5 10.5v7"/>
+  </symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+    <path d="M12 5v14M5 12h14"/>
+  </symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="3.2"/>
+    <path d="M19.4 14.5a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5v.2a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1h.2a2 2 0 1 1 0 4H21a1.6 1.6 0 0 0-1.5 1Z"/>
+  </symbol>
+  <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3.5v11M7.5 10.5 12 15l4.5-4.5M4.5 19.5h15"/>
+  </symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 15.5v-11M7.5 8.5 12 4l4.5 4.5M4.5 19.5h15"/>
+  </symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m8 10 4 4 4-4"/>
+  </symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="9"/><path d="M12 7.5v5M12 16.2v.1"/>
+  </symbol>
+</svg>
+
+<!-- ── header ──────────────────────────────────────────────────── -->
+<header class="header">
+  <div class="header-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>
+      </span>
+      <div>
+        <h1>To Do</h1>
+        <p class="brand-sub" id="summary">&nbsp;</p>
+      </div>
+    </div>
+
+    <div class="menu-wrap">
+      <button class="icon-btn" id="menuBtn" aria-haspopup="true" aria-expanded="false" aria-label="Settings and backup">
+        <svg class="icon"><use href="#i-gear"/></svg>
+      </button>
+      <div class="menu" id="menu" role="menu" hidden>
+        <button class="menu-item" id="exportBtn" role="menuitem">
+          <svg class="icon"><use href="#i-download"/></svg><span>Export backup</span>
+        </button>
+        <button class="menu-item" id="importBtn" role="menuitem">
+          <svg class="icon"><use href="#i-upload"/></svg><span>Import backup</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ── main ────────────────────────────────────────────────────── -->
+<main class="container">
+
+  <section id="emptyState" class="empty" hidden>
+    <svg class="empty-art" viewBox="0 0 200 150" fill="none" aria-hidden="true">
+      <rect x="52" y="20" width="96" height="118" rx="12" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="2"/>
+      <rect x="78" y="10" width="44" height="20" rx="7" fill="#DBEAFE" stroke="#93C5FD" stroke-width="2"/>
+      <path d="M70 55h44M70 74h58M70 93h34" stroke="#BFDBFE" stroke-width="6" stroke-linecap="round"/>
+      <circle cx="140" cy="106" r="24" fill="#2563EB"/>
+      <path d="m130 106 7 7 14-15" stroke="#fff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <h2>Nothing on your list</h2>
+    <p>Tap the <strong>+</strong> button to add your first task.</p>
+  </section>
+
+  <section id="pendingSection" hidden>
+    <h2 class="section-title">Pending <span class="count" id="pendingCount">0</span></h2>
+    <div id="pendingList" class="list" role="list"></div>
+  </section>
+
+  <section id="completedSection" class="completed-section" hidden>
+    <button class="section-toggle" id="completedToggle" aria-expanded="true" aria-controls="completedList">
+      <svg class="icon chevron"><use href="#i-chevron"/></svg>
+      <span class="section-title">Completed <span class="count" id="completedCount">0</span></span>
+    </button>
+    <div id="completedList" class="list" role="list"></div>
+  </section>
+
+</main>
+
+<button class="fab" id="fab" aria-label="Add task">
+  <svg class="icon"><use href="#i-plus"/></svg>
+</button>
+
+<input type="file" id="fileInput" accept="application/json,.json" hidden>
+
+<!-- ── modal A: add / edit task ─────────────────────────────────── -->
+<div class="overlay" id="taskOverlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="taskTitle">
+    <div class="sheet-head">
+      <span class="grabber" aria-hidden="true"></span>
+      <h2 id="taskTitle">New task</h2>
+    </div>
+
+    <form class="sheet-body" id="taskForm" novalidate>
+      <div class="field">
+        <label for="nameInput">Task name <span class="req">*</span></label>
+        <input type="text" id="nameInput" maxlength="120" placeholder="e.g. Team standup" autocomplete="off">
+        <p class="error" id="nameError" hidden>Please enter a task name.</p>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="dateInput">Date</label>
+          <input type="date" id="dateInput">
+        </div>
+        <div class="field">
+          <label for="timeInput">Time</label>
+          <input type="time" id="timeInput">
+        </div>
+      </div>
+      <p class="error" id="dateError" hidden>Pick a date to repeat from.</p>
+
+      <div class="field">
+        <label for="dayInput">Day</label>
+        <input type="text" id="dayInput" readonly tabindex="-1" placeholder="—" aria-readonly="true">
+      </div>
+
+      <div class="repeat-row">
+        <div class="repeat-label">
+          <svg class="icon"><use href="#i-repeat"/></svg>
+          <div>
+            <span>Repeat</span>
+            <small id="repeatSummary" hidden></small>
+          </div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="repeatToggle">
+          <span class="track" aria-hidden="true"><span class="thumb"></span></span>
+          <span class="sr-only">Repeat this task</span>
+        </label>
+      </div>
+    </form>
+
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" id="taskCancel" type="button">Cancel</button>
+      <button class="btn btn-primary" id="taskSave" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── modal B: repeat options ──────────────────────────────────── -->
+<div class="overlay" id="repeatOverlay" hidden>
+  <div class="sheet sheet-sm" role="dialog" aria-modal="true" aria-labelledby="repeatTitle">
+    <div class="sheet-head">
+      <span class="grabber" aria-hidden="true"></span>
+      <h2 id="repeatTitle">Repeat</h2>
+    </div>
+
+    <div class="sheet-body">
+      <div class="options" role="radiogroup" aria-labelledby="repeatTitle">
+        <button class="option" type="button" data-type="workweek" role="radio" aria-checked="false">
+          <span class="option-dot" aria-hidden="true"></span>
+          <span class="option-text"><strong>Workweek</strong><small>Every Monday to Friday</small></span>
+        </button>
+        <button class="option" type="button" data-type="custom" role="radio" aria-checked="false">
+          <span class="option-dot" aria-hidden="true"></span>
+          <span class="option-text"><strong>Custom</strong><small>Every so many days, weeks, months or years</small></span>
+        </button>
+      </div>
+
+      <div class="custom-fields" id="customFields" hidden>
+        <div class="field-row">
+          <div class="field">
+            <label for="intervalInput">Every</label>
+            <input type="number" id="intervalInput" min="1" max="99" step="1" value="1" inputmode="numeric">
+          </div>
+          <div class="field">
+            <label for="unitInput">Unit</label>
+            <select id="unitInput">
+              <option value="day">Day</option>
+              <option value="week" selected>Week</option>
+              <option value="month">Month</option>
+              <option value="year">Year</option>
+            </select>
+          </div>
+        </div>
+        <p class="error" id="intervalError" hidden>Enter a whole number between 1 and 99.</p>
+      </div>
+    </div>
+
+    <div class="sheet-foot">
+      <button class="btn btn-ghost" id="repeatCancel" type="button">Cancel</button>
+      <button class="btn btn-primary" id="repeatDone" type="button">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── modal C: confirm / choice ────────────────────────────────── -->
+<div class="overlay" id="confirmOverlay" hidden>
+  <div class="sheet sheet-sm" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="sheet-head">
+      <span class="grabber" aria-hidden="true"></span>
+      <h2 id="confirmTitle">Confirm</h2>
+    </div>
+    <div class="sheet-body">
+      <p class="confirm-text" id="confirmText"></p>
+    </div>
+    <div class="sheet-foot" id="confirmButtons"></div>
+  </div>
+</div>
+
+<div class="toast-region" id="toastRegion" role="status" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
