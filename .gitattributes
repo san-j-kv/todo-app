@@ -1,0 +1,8 @@
+# Git for Windows checks out with CRLF by default. The Gradle wrapper is a
+# POSIX shell script — CRLF line endings make it fail to run on macOS, Linux
+# and CI with a "bad interpreter" error. Pin it to LF on every platform.
+gradlew text eol=lf
+
+# ...and pin the Windows counterparts to CRLF for the same reason.
+*.bat text eol=crlf
+*.cmd text eol=crlf
