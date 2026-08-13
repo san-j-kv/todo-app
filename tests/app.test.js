@@ -16,7 +16,7 @@ const { ROOT, toISO, addDays, fireTime } = require('./harness');
 function makeBridge(permission) {
   const scheduled = new Map();
   const listeners = {};
-  const calls = { schedule: 0, cancel: 0, requestPermissions: 0, createChannel: 0 };
+  const calls = { schedule: 0, cancel: 0, requestPermissions: 0, createChannel: 0, write: 0 };
 
   const LocalNotifications = {
     checkPermissions: () => Promise.resolve({ display: permission }),
@@ -48,16 +48,52 @@ function makeBridge(permission) {
     }
   };
 
+  /* Stands in for the app-local TodoStore plugin: the task document as it sits
+     in getFilesDir()/tasks.json, plus the two system pickers. */
+  const store = { doc: null, failRead: false, failWrite: false };
+  const exported = [];
+  let inbox = { cancelled: true };
+  let exportSaved = true;
+
+  const TodoStore = {
+    read: () => {
+      if (store.failRead) return Promise.reject(new Error('read failed'));
+      // {} rather than {value: null} when there is no file — JSObject drops a
+      // null put, so this is what the web layer actually receives.
+      return Promise.resolve(store.doc === null ? {} : { value: store.doc });
+    },
+    write: (opts) => {
+      if (store.failWrite) return Promise.reject(new Error('write failed'));
+      calls.write++;
+      store.doc = opts.value;
+      return Promise.resolve();
+    },
+    exportDoc: (opts) => {
+      exported.push(opts);
+      return Promise.resolve({ saved: exportSaved });
+    },
+    importDoc: () => Promise.resolve(inbox)
+  };
+
   return {
     isNativePlatform: () => true,
     getPlatform: () => 'android',
     Plugins: {
       LocalNotifications,
+      TodoStore,
       App: { addListener: () => Promise.resolve({ remove() {} }) }
     },
     __scheduled: scheduled,
     __listeners: listeners,
-    __calls: calls
+    __calls: calls,
+    // `doc` lives in a closure, so these are accessors rather than a plain ref.
+    get __doc() { return store.doc; },
+    set __doc(value) { store.doc = value; },
+    __export: exported,
+    set __import(value) { inbox = value; },
+    set __exportSaved(value) { exportSaved = value; },
+    set __failRead(value) { store.failRead = value; },
+    set __failWrite(value) { store.failWrite = value; }
   };
 }
 
@@ -65,8 +101,9 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 const settle = async () => { for (let i = 0; i < 40; i++) await tick(); };
 
 /* Boots the real app. `prime` gets the bridge before the scripts run, so a
-   suite can seed a pre-existing pending record. */
-async function boot(permission, seedTasks, prime) {
+   suite can seed a pre-existing pending record or a stored document;
+   `primeWindow` gets the window, for seeding storage directly. */
+async function boot(permission, seedTasks, prime, primeWindow) {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'http://localhost/' });
   const w = dom.window;
@@ -74,13 +111,23 @@ async function boot(permission, seedTasks, prime) {
   if (prime) prime(bridge);
 
   w.Capacitor = bridge;
+  // Seeded through the legacy key, so every suite below also exercises the
+  // one-time migration into the document. The "document already exists" path
+  // is covered separately, via prime(bridge) setting __doc.
   if (seedTasks) w.localStorage.setItem('todo.tasks.v1', JSON.stringify(seedTasks));
+  if (primeWindow) primeWindow(w);
 
+  // index.html's <script> tags never run under runScripts:'outside-only', so
+  // this list is the real load order — store.js first, as in the markup.
+  w.eval(fs.readFileSync(path.join(ROOT, 'store.js'), 'utf8'));
   w.eval(fs.readFileSync(path.join(ROOT, 'notify.js'), 'utf8'));
   w.eval(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'));
   await settle();
   return { w, bridge };
 }
+
+// Reads the stored document back out of the fake.
+const docOf = (bridge) => JSON.parse(bridge.__doc);
 
 // Drives the real task sheet rather than poking the model directly.
 function addTask(w, name, date, time, category) {
@@ -220,8 +267,7 @@ module.exports = async function run(t) {
     const task = w.__todo.getTasks()[0];
     t.check('notifId backfilled on load', typeof task.notifId, 'number');
     t.check('and it got armed', bridge.__scheduled.size, 1);
-    t.check('backfilled id was persisted',
-      JSON.parse(w.localStorage.getItem('todo.tasks.v1'))[0].notifId, task.notifId);
+    t.check('backfilled id was persisted', docOf(bridge).tasks[0].notifId, task.notifId);
   }
 
   t.section('duplicate notifIds from a merged backup');
@@ -304,15 +350,21 @@ module.exports = async function run(t) {
     const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
     const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/' });
     const w = dom.window;
+    w.localStorage.setItem('todo.tasks.v1', JSON.stringify([seed({ id: 'old', name: 'From before' })]));
+    w.eval(fs.readFileSync(path.join(ROOT, 'store.js'), 'utf8'));
     w.eval(fs.readFileSync(path.join(ROOT, 'notify.js'), 'utf8'));
     w.eval(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'));
     await settle();
     addTask(w, 'Browser task', t2, '09:00');
     await settle();
-    t.check('task saved with no bridge present', w.__todo.getTasks().length, 1);
+    t.check('task saved with no bridge present', w.__todo.getTasks().length, 2);
     t.check('notify layer reports non-native', w.TodoNotify.state().native, 'false');
     t.check('no crash in the render path',
       w.document.querySelectorAll('[data-card]').length > 0, 'true');
+
+    const doc = JSON.parse(w.localStorage.getItem('todo.store.v1'));
+    t.check('browser fallback writes the document', doc.tasks.length, 2);
+    t.check('and migrated the old key away', w.localStorage.getItem('todo.tasks.v1'), 'null');
   }
 
   t.section('completed section is collapsed by default');
@@ -385,15 +437,15 @@ module.exports = async function run(t) {
       empty.document.getElementById('searchRow').hidden, 'true');
   }
 
-  t.section('categories persist independently of tasks');
+  t.section('categories live and die with their tasks');
   {
-    const { w } = await boot('granted');
+    const { w, bridge } = await boot('granted');
     addTask(w, 'Standup', t2, '09:00', 'Work');
     await settle();
     t.check('category stored on the task', w.__todo.getTasks()[0].category, 'Work');
     t.check('and offered for future tasks', w.__todo.getCategories().join(','), 'Work');
-    t.check('category list was persisted',
-      w.localStorage.getItem(w.__todo.CATEGORIES_KEY), '["Work"]');
+    t.check('the document stores no category list',
+      Object.prototype.hasOwnProperty.call(docOf(bridge), 'categories'), 'false');
 
     addTask(w, 'Retro', t5, '10:00', 'work');
     await settle();
@@ -401,12 +453,33 @@ module.exports = async function run(t) {
       w.__todo.getCategories().join(','), 'Work');
     t.check('and the task took the canonical spelling', w.__todo.getTasks()[1].category, 'Work');
 
-    // Deleting the last task using a category must not take it with them.
+    // One of the two tasks holding "Work" goes; the category stays because the
+    // other still carries it.
     w.__todo.deleteTask(w.__todo.getTasks()[0].id);
+    await settle();
+    t.check('one task left', w.__todo.getTasks().length, 1);
+    t.check('category still offered while a task carries it',
+      w.__todo.getCategories().join(','), 'Work');
+
+    // The last one goes, and the category goes with it.
     w.__todo.deleteTask(w.__todo.getTasks()[0].id);
     await settle();
     t.check('no tasks left', w.__todo.getTasks().length, 0);
-    t.check('category still offered', w.__todo.getCategories().join(','), 'Work');
+    t.check('category dropped with its last task', w.__todo.getCategories().join(','), '');
+  }
+
+  t.section('a completed task keeps its category alive');
+  {
+    const { w } = await boot('granted', [
+      seed({ id: 'a', name: 'Archived', category: 'Work', completed: true,
+             completedAt: '2026-08-01T10:00:00.000Z', notifId: 1 })
+    ]);
+    t.check('completed-only category is still offered',
+      w.__todo.getCategories().join(','), 'Work');
+
+    w.__todo.deleteTask('a');
+    await settle();
+    t.check('and goes when that task is deleted', w.__todo.getCategories().join(','), '');
   }
 
   t.section('categories arriving from a backup are folded in');
@@ -475,5 +548,186 @@ module.exports = async function run(t) {
     t.check('All clears the filter', pending(), 3);
     t.check('and hides the pill', d.getElementById('filterBar').hidden, 'true');
     t.check('filter state really is cleared', String(w.__todo.getCategoryFilter()), 'null');
+  }
+
+  /* ─────────────────────────────────────────────────────────────
+     The document store
+     ───────────────────────────────────────────────────────────── */
+
+  t.section('migration off the pre-document keys');
+  {
+    const { w, bridge } = await boot('granted', undefined, () => {}, (win) => {
+      win.localStorage.setItem('todo.tasks.v1', JSON.stringify([
+        seed({ id: 'a', name: 'Carried over', category: 'Work', notifId: 7 })
+      ]));
+      win.localStorage.setItem('todo.categories.v1', JSON.stringify(['Work', 'Home']));
+      win.localStorage.setItem('todo.notifSeq.v1', '7');
+    });
+
+    t.check('the task came across', w.__todo.getTasks()[0].name, 'Carried over');
+    // "Home" was in the old standalone list but on no task, so it does not
+    // survive a store that derives categories from the tasks.
+    t.check('only the category a task carries came across',
+      w.__todo.getCategories().join(','), 'Work');
+
+    const doc = docOf(bridge);
+    t.check('a document was written', doc.version, 2);
+    t.check('with the task in it', doc.tasks.length, 1);
+    t.check('and the counter', doc.notifSeq, 7);
+
+    t.check('old task key cleared', w.localStorage.getItem('todo.tasks.v1'), 'null');
+    t.check('old category key cleared', w.localStorage.getItem('todo.categories.v1'), 'null');
+    t.check('old counter key cleared', w.localStorage.getItem('todo.notifSeq.v1'), 'null');
+  }
+
+  t.section('a lost counter does not recycle notifIds');
+  {
+    // todo.notifSeq.v1 missing, but the tasks carry ids — the migration has to
+    // start above the highest of them or the next task collides with one.
+    const { w } = await boot('granted', [seed({ id: 'a', name: 'A', notifId: 42 })]);
+    addTask(w, 'B', t2, '09:00');
+    await settle();
+    const ids = w.__todo.getTasks().map((x) => x.notifId);
+    t.check('the new id clears the stored one', ids[1] > 42, 'true');
+  }
+
+  t.section('an existing document wins over stale legacy keys');
+  {
+    // The keys should already have been cleared, but a partial backup restore
+    // can bring them back. Re-migrating would revert the user's recent work.
+    const { w, bridge } = await boot(
+      'granted',
+      [seed({ id: 'stale', name: 'Old copy' })],
+      (b) => {
+        b.__doc = JSON.stringify({
+          version: 2, notifSeq: 3,
+          tasks: [seed({ id: 'live', name: 'Current copy', notifId: 3 })]
+        });
+      }
+    );
+
+    t.check('only the document was loaded', w.__todo.getTasks().length, 1);
+    t.check('and it is the current copy', w.__todo.getTasks()[0].name, 'Current copy');
+    t.check('the document was not overwritten', docOf(bridge).tasks[0].name, 'Current copy');
+    t.check('nothing was written at all', bridge.__calls.write, 0);
+  }
+
+  t.section('a v1 document is rewritten once to drop its category list');
+  {
+    const { w, bridge } = await boot('granted', undefined, (b) => {
+      b.__doc = JSON.stringify({
+        version: 1, notifSeq: 3, categories: ['Work', 'Ghost'],
+        tasks: [seed({ id: 'a', name: 'Kept', category: 'Work', notifId: 3 })]
+      });
+    });
+
+    t.check('the task survived the upgrade', w.__todo.getTasks()[0].name, 'Kept');
+    t.check('a category with a task is still offered',
+      w.__todo.getCategories().join(','), 'Work');
+
+    const doc = docOf(bridge);
+    t.check('the document was rewritten', bridge.__calls.write, 1);
+    t.check('at the new version', doc.version, 2);
+    t.check('with the stored list gone',
+      Object.prototype.hasOwnProperty.call(doc, 'categories'), 'false');
+  }
+
+  t.section('export through the system picker');
+  {
+    const { w, bridge } = await boot('granted', [seed({ id: 'a', name: 'Ship it', notifId: 1 })]);
+    w.document.getElementById('exportBtn').click();
+    await settle();
+
+    t.check('the picker was handed one document', bridge.__export.length, 1);
+    t.check('with a dated filename',
+      /^todo-backup-\d{4}-\d{2}-\d{2}\.json$/.test(bridge.__export[0].name), 'true');
+    const payload = JSON.parse(bridge.__export[0].value);
+    t.check('carrying the task', payload.tasks[0].name, 'Ship it');
+    t.check('confirmed to the user',
+      w.document.querySelector('#toastRegion .toast-msg').textContent, 'Exported 1 task');
+  }
+
+  t.section('backing out of the export picker is not an error');
+  {
+    const { w, bridge } = await boot('granted', [seed({ id: 'a', name: 'Ship it', notifId: 1 })],
+      (b) => { b.__exportSaved = false; });
+    w.document.getElementById('exportBtn').click();
+    await settle();
+    t.check('the picker still ran', bridge.__export.length, 1);
+    t.check('but nothing was announced',
+      w.document.querySelectorAll('#toastRegion .toast').length, 0);
+  }
+
+  t.section('import through the system picker');
+  {
+    const { w, bridge } = await boot('granted', [seed({ id: 'a', name: 'Mine', notifId: 1 })],
+      (b) => {
+        b.__import = { value: JSON.stringify({
+          app: 'todo-list', version: 1,
+          tasks: [seed({ id: 'b', name: 'Theirs', notifId: 9 })]
+        }) };
+      });
+
+    w.document.getElementById('importBtn').click();
+    await settle();
+
+    const buttons = [...w.document.querySelectorAll('#confirmButtons button')];
+    t.check('the merge/replace dialog opened', buttons.length, 3);
+    buttons.find((b) => b.textContent === 'Merge').click();
+    await settle();
+
+    t.check('both tasks are present', w.__todo.getTasks().length, 2);
+    t.check('and the document has them', docOf(bridge).tasks.length, 2);
+  }
+
+  t.section('backing out of the import picker changes nothing');
+  {
+    const { w } = await boot('granted', [seed({ id: 'a', name: 'Mine', notifId: 1 })],
+      (b) => { b.__import = { cancelled: true }; });
+    w.document.getElementById('importBtn').click();
+    await settle();
+    t.check('no dialog', w.document.getElementById('confirmOverlay').hidden, 'true');
+    t.check('task list untouched', w.__todo.getTasks().length, 1);
+  }
+
+  t.section('a failing write is survivable');
+  {
+    const { w, bridge } = await boot('granted', [seed({ id: 'a', name: 'Mine', notifId: 1 })],
+      (b) => { b.__failWrite = true; });
+    addTask(w, 'Added anyway', t2, '09:00');
+    await settle();
+
+    t.check('the task is in the list', w.__todo.getTasks().length, 2);
+    t.check('it rendered', w.document.querySelectorAll('#pendingList [data-card]').length > 0, 'true');
+    t.check('and the failure was reported',
+      /Could not save/.test(w.document.querySelector('#toastRegion .toast-msg').textContent), 'true');
+    t.check('reminders were still armed', bridge.__scheduled.size > 0, 'true');
+  }
+
+  t.section('a failing read never overwrites what is stored');
+  {
+    // The one path that could lose everything: read fails, the app looks empty,
+    // and the next mutation writes that emptiness over a good document.
+    const { w, bridge } = await boot('granted', undefined, (b) => {
+      b.__doc = JSON.stringify({
+        version: 1, notifSeq: 1, categories: [],
+        tasks: [seed({ id: 'precious', name: 'Do not lose me', notifId: 1 })]
+      });
+      b.__failRead = true;
+    });
+
+    t.check('the app reports the problem',
+      /Could not read/.test(w.document.querySelector('#toastRegion .toast-msg').textContent), 'true');
+
+    addTask(w, 'Typed into the void', t2, '09:00');
+    await settle();
+
+    t.check('nothing was written', bridge.__calls.write, 0);
+    t.check('the stored document is intact', docOf(bridge).tasks[0].name, 'Do not lose me');
+
+    // "Start fresh" is the deliberate way out, and it does write.
+    w.document.querySelector('#toastRegion .toast-action').click();
+    await settle();
+    t.check('start fresh writes an empty list', docOf(bridge).tasks.length, 0);
   }
 };

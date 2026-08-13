@@ -14,6 +14,14 @@ const SUITES = [
   { name: 'app     (integration, jsdom)', load: () => require('./app.test') }
 ];
 
+/* The app persists through promises now, and every commit() fires one without
+   awaiting it. A rejection escaping that path would otherwise be invisible
+   here — the assertions would still pass while the write silently failed. */
+const unhandled = [];
+process.on('unhandledRejection', (err) => {
+  unhandled.push((err && err.message) || String(err));
+});
+
 async function main() {
   const filter = process.argv[2];
   const suites = filter
@@ -43,7 +51,11 @@ async function main() {
     }
   }
 
-  const failed = t.failures.length + broken.length;
+  // A rejection reported on the last turn of the loop hasn't reached the
+  // handler yet, and process.exit() below would beat it.
+  await new Promise((r) => setImmediate(r));
+
+  const failed = t.failures.length + broken.length + unhandled.length;
   console.log('\n' + '─'.repeat(60));
   console.log(t.pass() + ' passed, ' + failed + ' failed');
 
@@ -55,6 +67,10 @@ async function main() {
     console.log('\nSuites that threw:');
     broken.forEach((b) => console.log('  · ' + b));
     console.log('(re-run with VERBOSE=1 for stack traces)');
+  }
+  if (unhandled.length) {
+    console.log('\nUnhandled promise rejections:');
+    unhandled.forEach((u) => console.log('  · ' + u));
   }
   console.log('');
 

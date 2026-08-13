@@ -1,10 +1,17 @@
-/* To Do — vanilla JS, localStorage only. No build step, no dependencies. */
+/* To Do — vanilla JS. No build step, no dependencies.
+
+   Tasks and the notification-id counter live together in one JSON document,
+   written through store.js: a real file in private storage on Android,
+   localStorage in a browser. Categories are derived from the tasks and are
+   not stored. The three keys below are the pre-document layout, read once
+   during migration and then cleared. */
 (function () {
   'use strict';
 
-  var STORAGE_KEY = 'todo.tasks.v1';
-  var NOTIF_SEQ_KEY = 'todo.notifSeq.v1';
-  var CATEGORIES_KEY = 'todo.categories.v1';
+  var LEGACY_TASKS_KEY = 'todo.tasks.v1';
+  var LEGACY_SEQ_KEY = 'todo.notifSeq.v1';
+  var LEGACY_CATEGORIES_KEY = 'todo.categories.v1';
+  var DOC_VERSION = 2; // 2 dropped the stored category list — see Categories below
   var DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
   var TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
   var UNITS = ['day', 'week', 'month', 'year'];
@@ -162,17 +169,15 @@
   /* Notification ids must be numbers that fit a Java 32-bit int, so the UUID
      above can't serve. A persisted counter gives every task a stable id we can
      cancel and reschedule by, with no risk of hash collisions. */
-  var notifSeq = null;
-  var notifSeqDirty = false;
+  var notifSeq = 0;
+  var docDirty = false;
 
+  /* The counter rides in the document rather than in its own key, so handing
+     out an id is pure in-memory work. That is what lets this stay synchronous
+     with an async store behind it — normalizeTask() calls it, and normalizeTask
+     is on the __todo surface and inside the import path. */
   function nextNotifId() {
-    if (notifSeq === null) {
-      var stored = 0;
-      try { stored = parseInt(localStorage.getItem(NOTIF_SEQ_KEY), 10); } catch (err) { stored = 0; }
-      notifSeq = isFinite(stored) && stored > 0 ? stored : 0;
-    }
     notifSeq = notifSeq >= 2147483000 ? 1 : notifSeq + 1;
-    try { localStorage.setItem(NOTIF_SEQ_KEY, String(notifSeq)); } catch (err) { /* full or blocked */ }
     return notifSeq;
   }
 
@@ -211,7 +216,7 @@
     var notifId = raw.notifId;
     if (typeof notifId !== 'number' || !isFinite(notifId) || notifId <= 0) {
       notifId = nextNotifId();
-      notifSeqDirty = true;
+      docDirty = true;
     }
 
     return {
@@ -228,38 +233,182 @@
     };
   }
 
-  function load() {
-    var parsed;
-    try {
-      parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-    } catch (err) {
-      parsed = [];
-    }
-    if (!Array.isArray(parsed)) parsed = [];
+  /* ─────────────────────────────────────────────────────────────
+     The document
 
-    var seen = {};
-    tasks = parsed.map(function (t) { return normalizeTask(t, seen); })
-                  .filter(Boolean);
-    dedupeNotifIds();
+     The tasks and the notification counter are written whole, as one object.
+     Reading it is asynchronous, and two things follow from that.
 
-    // An imported backup carries the categories of the device it came from,
-    // and those never went through addCategory() here. Fold them in — this
-    // also canonicalises case variants onto the spelling already known.
-    loadCategories();
-    var known = categories.length;
-    tasks.forEach(function (t) { t.category = rememberCategory(t.category); });
-    if (categories.length !== known) saveCategories();
+     Nothing may assume `tasks` is populated before load() resolves — the boot
+     chain at the bottom of this file is the only place that assumption holds.
+
+     And a read that fails must not fall through to "start empty". The next
+     save() would write that emptiness straight over a file that is still
+     perfectly good, which is the one way this app could lose everything.
+     loadFailed latches instead and save() stops writing until the user picks
+     a way out.
+     ───────────────────────────────────────────────────────────── */
+
+  var loadFailed = false;
+  var migrated = false;
+  var writeQueue = Promise.resolve(true);
+  var pendingText = null;
+
+  function store() {
+    if (!window.TodoStore) throw new Error('store.js did not load');
+    return window.TodoStore;
   }
 
-  function save() {
+  function serialize() {
+    return JSON.stringify({
+      version: DOC_VERSION,
+      notifSeq: notifSeq,
+      tasks: tasks,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  function applyDoc(data) {
+    // Ids handed out before the document landed — __todo.normalizeTask() and
+    // parseBackup() are both reachable during the read — must not be reissued.
+    notifSeq = Math.max(notifSeq, Number(data.notifSeq) || 0);
+
+    var arrived = tasks; // anything added while the read was still in flight
+    var raw = Array.isArray(data.tasks) ? data.tasks : [];
+    var seen = {};
+    tasks = raw.map(function (t) { return normalizeTask(t, seen); })
+               .filter(Boolean)
+               .concat(arrived);
+    dedupeNotifIds();
+
+    // An imported backup can carry two spellings of the same category on
+    // different tasks, since it was written by a device that folded them
+    // against its own list. Settle them onto one spelling here — in place, so
+    // that later tasks fold onto the first one seen.
+    tasks.forEach(function (t) {
+      var canon = canonicalCategory(t.category);
+      if (canon !== t.category) { t.category = canon; docDirty = true; }
+    });
+
+    // A document written before categories became a projection of the tasks
+    // still carries its own list. Nothing reads it now, so rewrite once to
+    // drop it rather than leaving a field that looks meaningful and isn't.
+    if (Number(data.version) !== DOC_VERSION) docDirty = true;
+  }
+
+  /* The pre-document layout: three independent keys, which could already
+     disagree with each other if a crash landed between two setItem calls.
+     Read once; the boot chain clears them after the document is safely down. */
+  function readLegacy() {
+    var raw = null;
+    try { raw = localStorage.getItem(LEGACY_TASKS_KEY); } catch (err) { raw = null; }
+    if (raw === null) return null;
+
+    // todo.categories.v1 is deliberately not read: categories are a projection
+    // of the tasks now, so one that no surviving task carries is one the user
+    // has already stopped using. It still gets cleared with the rest.
+    var doc = { notifSeq: 0, tasks: [] };
+
+    try { doc.tasks = JSON.parse(raw); } catch (err) { doc.tasks = []; }
+    if (!Array.isArray(doc.tasks)) doc.tasks = [];
+
+    var seq = 0;
+    try { seq = parseInt(localStorage.getItem(LEGACY_SEQ_KEY), 10); } catch (err) { seq = 0; }
+    if (!isFinite(seq) || seq < 0) seq = 0;
+
+    // A lost counter used to mean silent notifId collisions. Every id in the
+    // list is visible right here, so start above the highest of them.
+    doc.tasks.forEach(function (t) {
+      var n = t ? Number(t.notifId) : 0;
+      if (isFinite(n) && n > seq) seq = n;
+    });
+    doc.notifSeq = seq;
+
+    return doc;
+  }
+
+  function clearLegacyKeys() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+      localStorage.removeItem(LEGACY_TASKS_KEY);
+      localStorage.removeItem(LEGACY_SEQ_KEY);
+      localStorage.removeItem(LEGACY_CATEGORIES_KEY);
+    } catch (err) { /* nothing at stake — the document is already written */ }
+  }
+
+  // Resolves once the list is ready to render. Never rejects.
+  function load() {
+    var reading;
+    try {
+      reading = store().read();
     } catch (err) {
-      toast('Could not save — browser storage is full or blocked.', { type: 'error' });
+      reading = Promise.reject(err);
     }
-    // Every mutation — add, edit, complete, delete, recurring roll-forward,
-    // import — funnels through here, so one call keeps reminders in step.
+
+    return reading.then(function (text) {
+      if (text === null) {
+        var legacy = readLegacy();
+        if (!legacy) return; // first run — nothing stored anywhere
+        migrated = true;
+        applyDoc(legacy);
+        return;
+      }
+      applyDoc(JSON.parse(text));
+    }).catch(function () {
+      loadFailed = true;
+      toast('Could not read your saved tasks.', {
+        type: 'error',
+        duration: 10000,
+        action: { label: 'Start fresh', onClick: startFresh }
+      });
+    });
+  }
+
+  // The only way out of loadFailed, and deliberately a decision the user makes:
+  // it writes an empty list over whatever is down there.
+  function startFresh() {
+    loadFailed = false;
+    tasks = [];
+    commit();
+  }
+
+  /* Writes queue rather than race, so they can't land out of order, and any
+     two saves made in the same tick collapse into a single write of the later
+     state. The queue is reassigned to the *caught* promise, so a single
+     failure neither poisons every later write nor escapes as an unhandled
+     rejection from the ten fire-and-forget commit() call sites. */
+  function persist() {
+    if (loadFailed) return Promise.resolve(false);
+
+    pendingText = serialize();
+    writeQueue = writeQueue.then(function () {
+      // Null means a job queued after this one already wrote the state this one
+      // was going to write. Don't null it in the catch below: a newer persist()
+      // may have filled it in while this write was still in flight.
+      if (pendingText === null) return true;
+      var text = pendingText;
+      pendingText = null;
+      return store().write(text).then(function () { return true; });
+    }).catch(function () {
+      toast('Could not save — storage is full or unavailable.', { type: 'error' });
+      return false;
+    });
+
+    return writeQueue;
+  }
+
+  /* Persist, then put reminders back in step. Every task mutation — add, edit,
+     complete, delete, recurring roll-forward, import — funnels through here, so
+     one call covers both.
+
+     sync() stays in this tick rather than moving behind the write: it reads the
+     in-memory list, which is already current, and two sync() calls racing in
+     one tick would each diff against the same pending set and schedule the same
+     reminder twice. That is also why adding a category calls persist() and not
+     this — a category can't change a reminder. */
+  function save() {
+    var written = persist();
     if (window.TodoNotify) TodoNotify.sync(tasks);
+    return written;
   }
 
   function commit() { save(); render(); }
@@ -275,7 +424,7 @@
   function dedupeNotifIds() {
     var seen = {};
     tasks.forEach(function (t) {
-      if (seen[t.notifId]) { t.notifId = nextNotifId(); notifSeqDirty = true; }
+      if (seen[t.notifId]) { t.notifId = nextNotifId(); docDirty = true; }
       seen[t.notifId] = true;
     });
   }
@@ -288,13 +437,17 @@
   /* ─────────────────────────────────────────────────────────────
      Categories
 
-     Held in their own key rather than derived from the task list, so a
-     category the user invented is still offered after the last task using
-     it is deleted. A task stores the category name itself, not an id —
-     there is nothing to keep in step that way.
-     ───────────────────────────────────────────────────────────── */
+     A projection of the task list, not a list of its own: a category exists
+     for exactly as long as some task still carries it — pending or completed
+     — and the last such task leaving takes the category with it. A task
+     stores the category name itself rather than an id, so there is nothing
+     to keep in step and nothing that can drift.
 
-  var categories = [];
+     The cost is that a category cannot outlive its tasks, so inventing one
+     only sticks if the task holding it is saved. Both places that offer to
+     create a category attach it to a task in the same breath, so that is
+     never a half-finished state the user can see.
+     ───────────────────────────────────────────────────────────── */
 
   function cleanCategory(value) {
     return typeof value === 'string' ? value.trim().slice(0, MAX_CATEGORY) : '';
@@ -302,44 +455,31 @@
 
   /* Folds case variants together, so "work" typed later doesn't end up
      sitting beside an existing "Work". Returns the canonical spelling to
-     store on the task, or '' for uncategorised. */
-  function rememberCategory(value) {
+     store on the task, or '' for uncategorised. First spelling in the list
+     wins, which is why the load-time pass below rewrites in place. */
+  function canonicalCategory(value) {
     var name = cleanCategory(value);
     if (!name) return '';
     var lower = name.toLowerCase();
-    for (var i = 0; i < categories.length; i++) {
-      if (categories[i].toLowerCase() === lower) return categories[i];
+    for (var i = 0; i < tasks.length; i++) {
+      var known = tasks[i].category;
+      if (known && known.toLowerCase() === lower) return known;
     }
-    categories.push(name);
-    return name;
-  }
-
-  function loadCategories() {
-    var parsed;
-    try {
-      parsed = JSON.parse(localStorage.getItem(CATEGORIES_KEY) || '[]');
-    } catch (err) {
-      parsed = [];
-    }
-    categories = [];
-    if (Array.isArray(parsed)) parsed.forEach(rememberCategory);
-  }
-
-  function saveCategories() {
-    try {
-      localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories));
-    } catch (err) { /* full or blocked — losing the task list would matter, this doesn't */ }
-  }
-
-  function addCategory(value) {
-    var before = categories.length;
-    var name = rememberCategory(value);
-    if (name && categories.length !== before) saveCategories();
     return name;
   }
 
   function allCategories() {
-    return categories.slice().sort(function (a, b) {
+    var seen = {};
+    var names = [];
+    tasks.forEach(function (t) {
+      var name = t.category;
+      if (!name) return; // '' is uncategorised, offered separately
+      var lower = name.toLowerCase();
+      if (seen[lower]) return;
+      seen[lower] = true;
+      names.push(name);
+    });
+    return names.sort(function (a, b) {
       return a.toLowerCase().localeCompare(b.toLowerCase());
     });
   }
@@ -846,7 +986,7 @@
         $('newCategoryInput').focus();
         return;
       }
-      category = addCategory(typed);
+      category = canonicalCategory(typed);
     }
 
     var existing = editingId ? findTask(editingId) : null;
@@ -1121,8 +1261,11 @@
     toast(value ? 'Moved to ' + value : 'Category cleared');
   }
 
+  /* The category comes into being by being assigned — assignCategory() writes
+     it onto the task and commits, and the task is the only thing that keeps it
+     alive. Nothing to persist separately. */
   function addCategoryFromPicker() {
-    var name = addCategory($('pickerNewCategory').value);
+    var name = canonicalCategory($('pickerNewCategory').value);
     if (!name) { $('pickerNewCategory').focus(); return; }
     $('pickerNewCategory').value = '';
     assignCategory(name);
@@ -1235,15 +1378,30 @@
       tasks: tasks
     };
 
-    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    var text = JSON.stringify(payload, null, 2);
+    var name = 'todo-backup-' + toISO(new Date()) + '.json';
+    var done = 'Exported ' + tasks.length + (tasks.length === 1 ? ' task' : ' tasks');
+
+    // A WebView is an unreliable host for the <a download> trick, so on Android
+    // the file goes wherever the system picker points instead.
+    if (store().isNative()) {
+      store().exportDoc(name, text).then(function (res) {
+        if (res && res.saved) toast(done); // backing out of the picker is not an error
+      }).catch(function () {
+        toast('Couldn’t save the backup.', { type: 'error' });
+      });
+      return;
+    }
+
+    var blob = new Blob([text], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
-    var a = h('a', { href: url, download: 'todo-backup-' + toISO(new Date()) + '.json' });
+    var a = h('a', { href: url, download: name });
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
 
-    toast('Exported ' + tasks.length + (tasks.length === 1 ? ' task' : ' tasks'));
+    toast(done);
   }
 
   function parseBackup(text) {
@@ -1268,60 +1426,77 @@
       toast('Couldn’t read that file.', { type: 'error' });
     };
 
-    reader.onload = function () {
-      var result;
-      try {
-        result = parseBackup(String(reader.result));
-      } catch (err) {
-        toast('That doesn’t look like a valid backup file.', { type: 'error' });
-        return;
-      }
-
-      if (!result.tasks.length) {
-        toast('No usable tasks found in that file.', { type: 'error' });
-        return;
-      }
-
-      var count = result.tasks.length;
-      var noun = count === 1 ? 'task' : 'tasks';
-
-      confirmDialog({
-        title: 'Import ' + count + ' ' + noun + '?',
-        text: tasks.length
-          ? 'Merge keeps your ' + tasks.length + ' current ' + (tasks.length === 1 ? 'task' : 'tasks') +
-            ' and adds these. Replace deletes them first.'
-          : 'Your list is empty, so these will simply be added.',
-        buttons: [
-          { label: 'Cancel', value: null, variant: 'btn-ghost' },
-          { label: 'Merge', value: 'merge', variant: 'btn-ghost' },
-          { label: 'Replace', value: 'replace', variant: tasks.length ? 'btn-danger' : 'btn-primary' }
-        ]
-      }).then(function (choice) {
-        if (!choice) return;
-
-        if (choice === 'replace') {
-          tasks = result.tasks;
-        } else {
-          var byId = {};
-          tasks.forEach(function (t) { byId[t.id] = t; });
-          result.tasks.forEach(function (t) { byId[t.id] = t; }); // imported wins on conflict
-          tasks = Object.keys(byId).map(function (k) { return byId[k]; });
-        }
-
-        dedupeNotifIds();
-        commit();
-        toast('Imported ' + count + ' ' + noun +
-              (result.skipped ? ' (' + result.skipped + ' skipped as invalid)' : ''));
-      });
-    };
+    reader.onload = function () { importText(String(reader.result)); };
 
     reader.readAsText(file);
+  }
+
+  /* Shared by both pickers — the browser's file input and Android's SAF — so
+     the merge/replace decision lives in exactly one place. */
+  function importText(text) {
+    var result;
+    try {
+      result = parseBackup(text);
+    } catch (err) {
+      toast('That doesn’t look like a valid backup file.', { type: 'error' });
+      return;
+    }
+
+    if (!result.tasks.length) {
+      toast('No usable tasks found in that file.', { type: 'error' });
+      return;
+    }
+
+    var count = result.tasks.length;
+    var noun = count === 1 ? 'task' : 'tasks';
+
+    confirmDialog({
+      title: 'Import ' + count + ' ' + noun + '?',
+      text: tasks.length
+        ? 'Merge keeps your ' + tasks.length + ' current ' + (tasks.length === 1 ? 'task' : 'tasks') +
+          ' and adds these. Replace deletes them first.'
+        : 'Your list is empty, so these will simply be added.',
+      buttons: [
+        { label: 'Cancel', value: null, variant: 'btn-ghost' },
+        { label: 'Merge', value: 'merge', variant: 'btn-ghost' },
+        { label: 'Replace', value: 'replace', variant: tasks.length ? 'btn-danger' : 'btn-primary' }
+      ]
+    }).then(function (choice) {
+      if (!choice) return;
+
+      if (choice === 'replace') {
+        tasks = result.tasks;
+      } else {
+        var byId = {};
+        tasks.forEach(function (t) { byId[t.id] = t; });
+        result.tasks.forEach(function (t) { byId[t.id] = t; }); // imported wins on conflict
+        tasks = Object.keys(byId).map(function (k) { return byId[k]; });
+      }
+
+      dedupeNotifIds();
+      commit();
+      toast('Imported ' + count + ' ' + noun +
+            (result.skipped ? ' (' + result.skipped + ' skipped as invalid)' : ''));
+    });
   }
 
   $('exportBtn').addEventListener('click', exportTasks);
 
   $('importBtn').addEventListener('click', function () {
     setMenu(false);
+
+    // The document the picker returns is a backup file, but tasks.json itself
+    // parses too — parseBackup() accepts a bare {tasks:[…]}, so a user who
+    // picks their own store file gets a working import rather than an error.
+    if (store().isNative()) {
+      store().importDoc().then(function (res) {
+        if (res && typeof res.value === 'string') importText(res.value);
+      }).catch(function () {
+        toast('Couldn’t read that file.', { type: 'error' });
+      });
+      return;
+    }
+
     $('fileInput').click();
   });
 
@@ -1342,8 +1517,12 @@
     nextOccurrence: nextOccurrence, describeRecurrence: describeRecurrence,
     normalizeTask: normalizeTask, taskMs: taskMs, parseBackup: parseBackup,
     openTaskModal: openTaskModal, toggleComplete: toggleComplete, deleteTask: deleteTask,
-    render: render, load: load, STORAGE_KEY: STORAGE_KEY,
-    CATEGORIES_KEY: CATEGORIES_KEY,
+    render: render,
+    load: load, // returns a Promise now — the document is read asynchronously
+    importText: importText,
+    LEGACY_TASKS_KEY: LEGACY_TASKS_KEY,
+    LEGACY_SEQ_KEY: LEGACY_SEQ_KEY,
+    LEGACY_CATEGORIES_KEY: LEGACY_CATEGORIES_KEY,
     toast: toast, confirmDialog: confirmDialog, formatTime: formatTime,
     getCategories: allCategories,
     openCategoryPicker: openCategoryPicker,
@@ -1369,21 +1548,36 @@
     }
   };
 
-  load();
-  // normalizeTask() hands out notifIds to tasks stored before reminders
-  // existed, but load() never writes — persist them or they churn every boot.
-  if (notifSeqDirty) { notifSeqDirty = false; save(); }
-  render();
+  /* Reading the document is asynchronous, so the whole tail hangs off it. The
+     first render waits — which is fine, because #emptyState and #noResults are
+     hidden in the markup until render() reveals them, so an unpopulated list
+     looks like a list that hasn't drawn yet, not like an empty one. */
+  load().then(function () {
+    // normalizeTask() hands out notifIds to tasks stored before reminders
+    // existed, and a migration produces a document that has never been
+    // written. load() itself never writes, so do it here or it churns every
+    // boot. One write covers both: the migrated document is the normalised one.
+    if (migrated || docDirty) {
+      docDirty = false;
+      persist().then(function (ok) {
+        // Only once the document is safely down. If the write failed the old
+        // keys are still the only copy, and the next launch tries again.
+        if (ok && migrated) clearLegacyKeys();
+      });
+    }
 
-  if (window.TodoNotify) {
-    // Forced: a cold start may follow a force-stop or an OEM background kill,
-    // either of which drops the OS alarms while the plugin still reports them
-    // as pending. Re-arm from scratch rather than trusting that report.
-    TodoNotify.init().then(function (ok) {
-      if (ok) TodoNotify.sync(tasks, true);
-    });
-  }
+    render();
 
-  // Overdue chips and relative labels go stale as the clock moves on.
-  setInterval(render, 60000);
+    if (window.TodoNotify) {
+      // Forced: a cold start may follow a force-stop or an OEM background kill,
+      // either of which drops the OS alarms while the plugin still reports them
+      // as pending. Re-arm from scratch rather than trusting that report.
+      TodoNotify.init().then(function (ok) {
+        if (ok) TodoNotify.sync(tasks, true);
+      });
+    }
+
+    // Overdue chips and relative labels go stale as the clock moves on.
+    setInterval(render, 60000);
+  });
 })();
