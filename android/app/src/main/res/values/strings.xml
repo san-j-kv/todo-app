@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">To Do</string>
+    <string name="title_activity_main">To Do</string>
+    <string name="package_name">com.sanjkv.todo</string>
+    <string name="custom_url_scheme">com.sanjkv.todo</string>
+</resources>

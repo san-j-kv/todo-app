@@ -1,0 +1,31 @@
+# Dependencies — reinstall with `npm ci`
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# Secrets and signing material.
+# android/.gitignore ships these commented out; they are enabled here so a
+# keystore or service-account file dropped into the tree can never be
+# committed by accident.
+*.jks
+*.keystore
+keystore.properties
+google-services.json
+GoogleService-Info.plist
+.env
+.env.*
+
+# Build artefacts that escape the platform gitignores
+*.apk
+*.aab
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.idea/
+.vscode/
