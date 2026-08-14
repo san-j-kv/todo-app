@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ (API 31+) backup and transfer policy. Older releases ignore this
+  file and are covered by android:allowBackup="false" alone.
+
+  The whole point is tasks.json, which lives in getFilesDir() and is the only
+  copy of the user's task list. Auto Backup would otherwise push it to the
+  account's Google Drive quota as a side effect of storing it in private files.
+-->
+<data-extraction-rules>
+
+    <!--
+      No cloud copy. android:allowBackup="false" already stops this on every
+      release; saying it again here means flipping that flag back later cannot
+      silently start uploading the task list without someone also editing this
+      file.
+    -->
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </cloud-backup>
+
+    <!--
+      Device-to-device transfer stays on, and is the reason this file exists
+      rather than allowBackup="false" on its own: on Android 12+ that flag
+      governs cloud backup only, so D2D has to be decided here either way.
+
+      Keeping it is deliberate. A direct transfer to the user's own new phone
+      never leaves a copy on someone else's server, and it is what stops
+      "hardening the backup flag" from quietly becoming "lose every task on
+      your next upgrade". The in-app Export to a file the user picks is the
+      manual path; this is the automatic one.
+    -->
+    <device-transfer>
+        <include domain="file" path="." />
+    </device-transfer>
+
+</data-extraction-rules>

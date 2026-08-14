@@ -1,8 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- allowBackup="false": tasks.json lives in getFilesDir(), which Auto
+         Backup sweeps up wholesale, so leaving it on shipped the user's entire
+         task list to their Google Drive quota as a side effect of storing it
+         privately. On Android 12+ this flag covers cloud backup only —
+         device-to-device transfer is decided in data_extraction_rules.xml,
+         where it is deliberately left on so a new phone still inherits the
+         list. fullBackupContent is not set: with backups off it is dead
+         config on API 30 and below, and ignored on 31+. -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

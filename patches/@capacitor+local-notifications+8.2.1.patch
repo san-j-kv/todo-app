@@ -1,8 +1,8 @@
 diff --git a/node_modules/@capacitor/local-notifications/android/src/main/java/com/capacitorjs/plugins/localnotifications/LocalNotificationManager.java b/node_modules/@capacitor/local-notifications/android/src/main/java/com/capacitorjs/plugins/localnotifications/LocalNotificationManager.java
-index 0b826a5..ff825fd 100644
+index 0b826a5..b7fca50 100644
 --- a/node_modules/@capacitor/local-notifications/android/src/main/java/com/capacitorjs/plugins/localnotifications/LocalNotificationManager.java
 +++ b/node_modules/@capacitor/local-notifications/android/src/main/java/com/capacitorjs/plugins/localnotifications/LocalNotificationManager.java
-@@ -260,8 +260,21 @@ public class LocalNotificationManager {
+@@ -260,12 +260,39 @@ public class LocalNotificationManager {
              NotificationAction[] actionGroup = storage.getActionGroup(actionTypeId);
              for (NotificationAction notificationAction : actionGroup) {
                  // TODO Add custom icons to actions
@@ -22,7 +22,26 @@ index 0b826a5..ff825fd 100644
 +                Intent actionIntent = new Intent(context.getPackageName() + ".NOTIF_ACTION");
 +                actionIntent.setPackage(context.getPackageName());
 +                actionIntent.putExtras(buildIntent(localNotification, notificationAction.getId()));
++
++                // PATCH (todo-app): immutable unless the button takes typed input.
++                // Reusing `flags` would carry the body-tap intent's FLAG_MUTABLE,
++                // which exists so a RemoteInput reply can be written back into the
++                // intent. A plain button has nothing to fill in, and every action's
++                // PendingIntent is readable by any installed NotificationListener —
++                // so only the input case keeps mutability.
++                int actionFlags = PendingIntent.FLAG_CANCEL_CURRENT;
++                if (android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
++                    actionFlags =
++                        actionFlags |
++                        (notificationAction.isInput() ? PendingIntent.FLAG_MUTABLE : PendingIntent.FLAG_IMMUTABLE);
++                }
++
 +                PendingIntent actionPendingIntent = PendingIntent.getBroadcast(
                      context,
                      localNotification.getId() + notificationAction.getId().hashCode(),
                      actionIntent,
+-                    flags
++                    actionFlags
+                 );
+                 NotificationCompat.Action.Builder actionBuilder = new NotificationCompat.Action.Builder(
+                     R.drawable.ic_transparent,

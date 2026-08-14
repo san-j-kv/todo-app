@@ -1,5 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  What the app's FileProvider is allowed to hand out content:// URIs for.
+
+  This shipped as Capacitor boilerplate granting <external-path path="."/> —
+  the root of shared external storage, i.e. every photo, download and document
+  on the device — plus <cache-path path="."/>. Nothing in this app ever asked
+  for either. The provider is exported="false", so a URI still has to be handed
+  out deliberately, but a path that broad turns any future mis-issued grant
+  into a read of the user's whole SD card rather than of one file.
+
+  The only real consumer is Capacitor core: BridgeWebChromeClient photographs
+  into getExternalFilesDir(DIRECTORY_PICTURES) when a WebView <input type="file">
+  offers the camera, then wraps it with getUriForFile against this provider.
+  That is an external-files-path (app-private, no shared storage), and it is
+  the one entry kept. Removing it entirely would leave that path throwing
+  IllegalArgumentException instead of failing gracefully.
+
+  The task document itself is not here on purpose: import and export go through
+  the Storage Access Framework, where the user picks the file and the URI comes
+  from the system picker, so tasks.json never needs a grant of its own.
+-->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="my_images" path="." />
-    <cache-path name="my_cache_images" path="." />
+    <external-files-path name="captured_images" path="Pictures" />
 </paths>
