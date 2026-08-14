@@ -514,6 +514,58 @@ module.exports = async function run(t) {
     t.check('and it joined the category list', w.__todo.getCategories().join(','), 'Errands');
   }
 
+  t.section('picking a category inside the task sheet');
+  {
+    const { w } = await boot('granted', [
+      seed({ id: 'a', name: 'Ship it', category: 'Errands', notifId: 1 })
+    ]);
+    const d = w.document;
+
+    w.__todo.openTaskModal(null);
+    t.check('the sheet has no Day field', String(d.getElementById('dayInput')), 'null');
+    t.check('the button starts uncategorised',
+      d.getElementById('categoryButtonText').textContent, 'Uncategorised');
+
+    d.getElementById('categoryButton').click();
+    t.check('the picker opened', d.getElementById('categoryOverlay').hidden, 'false');
+    t.check('it offers Uncategorised and the known category',
+      [...d.querySelectorAll('#categoryOptions .option strong')].map((e) => e.textContent).join(','),
+      'Uncategorised,Errands');
+
+    [...d.querySelectorAll('#categoryOptions .option')][1].click();
+    // closeModal() hides on a 150ms animation tick; the class flips at once.
+    t.check('the picker closed',
+      d.getElementById('categoryOverlay').classList.contains('closing'), 'true');
+    t.check('the button shows the choice',
+      d.getElementById('categoryButtonText').textContent, 'Errands');
+
+    // A name invented in the sheet has no task yet, so it rides the __new path.
+    d.getElementById('categoryButton').click();
+    d.getElementById('pickerNewCategory').value = 'Health';
+    d.getElementById('pickerAddCategory').click();
+    t.check('the button shows the invented name',
+      d.getElementById('categoryButtonText').textContent, 'Health');
+    t.check('parked behind the new-category sentinel',
+      d.getElementById('categoryInput').value, '__new');
+
+    d.getElementById('nameInput').value = 'Walk';
+    d.getElementById('taskSave').click();
+    await settle();
+
+    t.check('the task saved with it',
+      w.__todo.getTasks().find((x) => x.name === 'Walk').category, 'Health');
+    t.check('and it joined the category list',
+      w.__todo.getCategories().join(','), 'Errands,Health');
+
+    // Reopening an existing task must show its category checked.
+    w.__todo.openTaskModal(w.__todo.getTasks().find((x) => x.name === 'Ship it'));
+    t.check('editing preselects the stored category',
+      d.getElementById('categoryButtonText').textContent, 'Errands');
+    d.getElementById('categoryButton').click();
+    t.check('and the picker checks that row',
+      d.querySelector('#categoryOptions .option[aria-checked="true"] strong').textContent, 'Errands');
+  }
+
   t.section('category filter drawer');
   {
     const { w } = await boot('granted', [
@@ -672,7 +724,9 @@ module.exports = async function run(t) {
     await settle();
 
     const buttons = [...w.document.querySelectorAll('#confirmButtons button')];
-    t.check('the merge/replace dialog opened', buttons.length, 3);
+    t.check('the import dialog opened', buttons.length, 2);
+    t.check('with no way to replace the list',
+      buttons.map((b) => b.textContent).join(','), 'Cancel,Merge');
     buttons.find((b) => b.textContent === 'Merge').click();
     await settle();
 

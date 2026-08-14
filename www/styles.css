@@ -497,7 +497,7 @@ button, input, select { font: inherit; color: inherit; }
 }
 .req { color: var(--danger); }
 
-.field input, .field select {
+.field input, .field select, .field .select-field {
   width: 100%;
   min-height: 46px;
   padding: 10px 12px;
@@ -506,20 +506,23 @@ button, input, select { font: inherit; color: inherit; }
   background: var(--surface);
   transition: border-color .16s var(--ease), box-shadow .16s var(--ease);
 }
-.field input:hover, .field select:hover { border-color: #CBD5E1; }
-.field input:focus, .field select:focus {
+.field input:hover, .field select:hover, .field .select-field:hover { border-color: #CBD5E1; }
+.field input:focus, .field select:focus, .field .select-field:focus {
   outline: none;
   border-color: var(--blue-500);
   box-shadow: 0 0 0 3.5px rgba(59, 130, 246, .16);
 }
-.field input[readonly] {
-  background: var(--blue-50);
-  border-color: var(--blue-100);
-  color: var(--blue-700);
-  font-weight: 550;
-  cursor: default;
+
+/* stands in for a native select — the popup it opens is our own sheet */
+.field .select-field {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  text-align: left;
+  cursor: pointer;
 }
-.field input[readonly]:hover { border-color: var(--blue-100); }
+.field .select-field > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field .select-field .icon { color: var(--muted); flex: none; }
+.field .select-field.muted > span { color: var(--muted); }
+
 .field input.invalid { border-color: var(--danger); }
 .field input.invalid:focus { box-shadow: 0 0 0 3.5px rgba(220, 38, 38, .14); }
 
@@ -574,9 +577,10 @@ button, input, select { font: inherit; color: inherit; }
   background: var(--surface);
   text-align: left;
   cursor: pointer;
-  transition: border-color .16s var(--ease), background .16s var(--ease);
+  transition: border-color .16s var(--ease), background .16s var(--ease), transform .12s var(--ease);
 }
 .option:hover { border-color: var(--blue-500); background: #FBFDFF; }
+.option:active { transform: scale(.99); }
 .option[aria-checked="true"] { border-color: var(--blue-600); background: var(--blue-50); }
 
 .option-dot {

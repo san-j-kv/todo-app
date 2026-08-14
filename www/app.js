@@ -882,11 +882,6 @@
   var editingId = null;
   var draftRecurrence = null;
 
-  function updateDayField() {
-    var iso = $('dateInput').value;
-    $('dayInput').value = parseLocal(iso) ? dayName(iso) : '';
-  }
-
   function updateRepeatUI() {
     var summary = $('repeatSummary');
     var text = describeRecurrence(draftRecurrence);
@@ -915,16 +910,39 @@
     });
     sel.appendChild(h('option', { value: NEW_CATEGORY, text: '+ New category…' }));
     sel.value = names.indexOf(selected) === -1 ? '' : selected;
-    updateNewCategoryField();
+    $('newCategoryInput').value = '';
+    updateCategoryButton();
   }
 
-  function updateNewCategoryField() {
-    var isNew = $('categoryInput').value === NEW_CATEGORY;
-    $('newCategoryInput').hidden = !isNew;
-    if (!isNew) {
+  /* The select is never seen, so the button is what has to read correctly —
+     including the not-yet-created name parked behind the NEW_CATEGORY option. */
+  function formCategory() {
+    var sel = $('categoryInput');
+    return sel.value === NEW_CATEGORY ? $('newCategoryInput').value : sel.value;
+  }
+
+  function updateCategoryButton() {
+    var name = formCategory();
+    $('categoryButtonText').textContent = name || 'Uncategorised';
+    $('categoryButton').classList.toggle('muted', !name);
+  }
+
+  function setFormCategory(value) {
+    var sel = $('categoryInput');
+    var known = Array.prototype.some.call(sel.options, function (o) {
+      return o.value === value && o.value !== NEW_CATEGORY;
+    });
+
+    if (!value || known) {
+      sel.value = value;
       $('newCategoryInput').value = '';
-      $('categoryError').hidden = true;
+    } else {
+      sel.value = NEW_CATEGORY;
+      $('newCategoryInput').value = value;
     }
+
+    $('categoryError').hidden = true;
+    updateCategoryButton();
   }
 
   function openTaskModal(task) {
@@ -937,7 +955,6 @@
     $('timeInput').value = task ? task.time : '';
     clearTaskErrors();
     fillCategorySelect(task ? task.category : '');
-    updateDayField();
     updateRepeatUI();
 
     openModal($('taskOverlay'), closeTaskModal);
@@ -983,7 +1000,7 @@
       var typed = cleanCategory($('newCategoryInput').value);
       if (!typed) {
         $('categoryError').hidden = false;
-        $('newCategoryInput').focus();
+        $('categoryButton').focus();
         return;
       }
       category = canonicalCategory(typed);
@@ -1017,8 +1034,6 @@
     toast(existing ? 'Task updated' : 'Task added');
   }
 
-  $('dateInput').addEventListener('change', updateDayField);
-  $('dateInput').addEventListener('input', updateDayField);
   $('taskSave').addEventListener('click', saveTask);
   $('taskCancel').addEventListener('click', closeTaskModal);
   $('nameInput').addEventListener('input', function () {
@@ -1216,10 +1231,11 @@
      ───────────────────────────────────────────────────────────── */
 
   var pickingId = null;
+  var pickerMode = 'card'; // 'card' assigns to a task, 'form' fills the task sheet
 
   function renderCategoryOptions() {
     var task = findTask(pickingId);
-    var current = task ? task.category : '';
+    var current = pickerMode === 'form' ? formCategory() : (task ? task.category : '');
     var box = $('categoryOptions');
     box.textContent = '';
 
@@ -1235,13 +1251,26 @@
       return btn;
     }
 
+    var names = allCategories();
     box.appendChild(option('', 'Uncategorised'));
-    allCategories().forEach(function (name) { box.appendChild(option(name, name)); });
+    names.forEach(function (name) { box.appendChild(option(name, name)); });
+
+    // A name typed into the sheet has no task yet, so allCategories() misses it.
+    if (current && names.indexOf(current) === -1) box.appendChild(option(current, current));
   }
 
   function openCategoryPicker(taskId) {
     if (!findTask(taskId)) return;
+    pickerMode = 'card';
     pickingId = taskId;
+    $('pickerNewCategory').value = '';
+    renderCategoryOptions();
+    openModal($('categoryOverlay'), closeCategoryPicker);
+  }
+
+  function openFormCategoryPicker() {
+    pickerMode = 'form';
+    pickingId = null;
     $('pickerNewCategory').value = '';
     renderCategoryOptions();
     openModal($('categoryOverlay'), closeCategoryPicker);
@@ -1250,9 +1279,16 @@
   function closeCategoryPicker() {
     closeModal($('categoryOverlay'));
     pickingId = null;
+    pickerMode = 'card';
   }
 
   function assignCategory(value) {
+    if (pickerMode === 'form') {
+      closeCategoryPicker();
+      setFormCategory(value);
+      return;
+    }
+
     var task = findTask(pickingId);
     closeCategoryPicker();
     if (!task || task.category === value) return;
@@ -1279,7 +1315,7 @@
   });
   $('categoryCancel').addEventListener('click', closeCategoryPicker);
 
-  $('categoryInput').addEventListener('change', updateNewCategoryField);
+  $('categoryButton').addEventListener('click', openFormCategoryPicker);
 
   /* ─────────────────────────────────────────────────────────────
      Search and category filter
@@ -1432,7 +1468,8 @@
   }
 
   /* Shared by both pickers — the browser's file input and Android's SAF — so
-     the merge/replace decision lives in exactly one place. */
+     the confirmation lives in exactly one place. An import only ever merges:
+     nothing already on the list can be lost by a mistaken tap. */
   function importText(text) {
     var result;
     try {
@@ -1453,25 +1490,20 @@
     confirmDialog({
       title: 'Import ' + count + ' ' + noun + '?',
       text: tasks.length
-        ? 'Merge keeps your ' + tasks.length + ' current ' + (tasks.length === 1 ? 'task' : 'tasks') +
-          ' and adds these. Replace deletes them first.'
+        ? 'Your ' + tasks.length + ' current ' + (tasks.length === 1 ? 'task' : 'tasks') +
+          ' will be kept — these are added on top.'
         : 'Your list is empty, so these will simply be added.',
       buttons: [
         { label: 'Cancel', value: null, variant: 'btn-ghost' },
-        { label: 'Merge', value: 'merge', variant: 'btn-ghost' },
-        { label: 'Replace', value: 'replace', variant: tasks.length ? 'btn-danger' : 'btn-primary' }
+        { label: 'Merge', value: 'merge', variant: 'btn-primary' }
       ]
     }).then(function (choice) {
       if (!choice) return;
 
-      if (choice === 'replace') {
-        tasks = result.tasks;
-      } else {
-        var byId = {};
-        tasks.forEach(function (t) { byId[t.id] = t; });
-        result.tasks.forEach(function (t) { byId[t.id] = t; }); // imported wins on conflict
-        tasks = Object.keys(byId).map(function (k) { return byId[k]; });
-      }
+      var byId = {};
+      tasks.forEach(function (t) { byId[t.id] = t; });
+      result.tasks.forEach(function (t) { byId[t.id] = t; }); // imported wins on conflict
+      tasks = Object.keys(byId).map(function (k) { return byId[k]; });
 
       dedupeNotifIds();
       commit();

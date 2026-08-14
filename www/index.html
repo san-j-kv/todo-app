@@ -189,18 +189,6 @@
       </div>
       <p class="error" id="dateError" hidden>Pick a date to repeat from.</p>
 
-      <div class="field">
-        <label for="dayInput">Day</label>
-        <input type="text" id="dayInput" readonly tabindex="-1" placeholder="—" aria-readonly="true">
-      </div>
-
-      <div class="field">
-        <label for="categoryInput">Category</label>
-        <select id="categoryInput"></select>
-        <input type="text" id="newCategoryInput" maxlength="40" placeholder="New category name" autocomplete="off" hidden>
-        <p class="error" id="categoryError" hidden>Enter a name for the new category.</p>
-      </div>
-
       <div class="repeat-row">
         <div class="repeat-label">
           <svg class="icon"><use href="#i-repeat"/></svg>
@@ -214,6 +202,20 @@
           <span class="track" aria-hidden="true"><span class="thumb"></span></span>
           <span class="sr-only">Repeat this task</span>
         </label>
+      </div>
+
+      <!-- The value lives on the hidden select; the button opens the same
+           picker sheet the card chips use, so no native dropdown appears. -->
+      <div class="field">
+        <label id="categoryLabel">Category</label>
+        <button class="select-field" id="categoryButton" type="button"
+                aria-haspopup="dialog" aria-labelledby="categoryLabel categoryButtonText">
+          <span id="categoryButtonText">Uncategorised</span>
+          <svg class="icon"><use href="#i-chevron"/></svg>
+        </button>
+        <select id="categoryInput" hidden></select>
+        <input type="text" id="newCategoryInput" maxlength="40" autocomplete="off" hidden>
+        <p class="error" id="categoryError" hidden>Enter a name for the new category.</p>
       </div>
     </form>
 
