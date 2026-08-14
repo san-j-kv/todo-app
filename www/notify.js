@@ -332,9 +332,11 @@
       types: [{
         id: ACTION_TYPE,
         actions: [
-          // foreground:false lets iOS handle this without opening the app.
-          // Android launches the activity regardless — Capacitor has no
-          // headless JS, so expect the app to surface briefly there.
+          // foreground:false is what iOS reads. Android has no equivalent field
+          // and the stock plugin opens the activity for every button, so
+          // patches/@capacitor+local-notifications+8.2.1.patch reroutes action
+          // buttons to a broadcast and TaskActionReceiver completes the task
+          // natively. handleAction() below stays the iOS and browser path.
           { id: 'done', title: 'Mark done', foreground: false }
         ]
       }]
@@ -348,6 +350,11 @@
     if (!a || !taskId) return;
 
     if (event.actionId === 'done') {
+      // Only reached where the action still routes through the activity — iOS,
+      // and Android if the plugin patch is ever lost. TaskActionReceiver has
+      // already done the work otherwise, and completeById() ignores a task that
+      // is already completed, so arriving here twice is harmless.
+      //
       // Delegates to app.js's toggleComplete(), which already archives the
       // occurrence, rolls a recurring task forward and re-saves — and the
       // save triggers the sync that arms the next reminder.
@@ -377,10 +384,10 @@
         // un-armed until something re-syncs. Resume is that something.
         if (window.Capacitor.Plugins.App && window.Capacitor.Plugins.App.addListener) {
           window.Capacitor.Plugins.App.addListener('appStateChange', function (state) {
-            if (state && state.isActive) resync();
+            if (state && state.isActive) refresh();
           });
         }
-        document.addEventListener('resume', resync, false);
+        document.addEventListener('resume', refresh, false);
 
         ready = true;
         return true;
@@ -394,6 +401,23 @@
   function resync(force) {
     var a = api();
     if (a && a.getTasks) sync(a.getTasks(), force === true);
+  }
+
+  /* Coming back to the foreground has two jobs. "Mark done" is handled by a
+     background receiver that rewrites the document behind us, so re-read it;
+     and anything that fired while we were away needs re-arming.
+
+     The plugin's storeChanged event normally gets there first, but only while
+     the process was alive — this is the path for a launch after a kill, and the
+     belt to that event's braces. reloadFromStore() resyncs when it reloaded, so
+     only the miss needs a sync of its own. */
+  function refresh() {
+    var a = api();
+    if (!a) return;
+    if (!a.reloadFromStore) { resync(); return; }
+    a.reloadFromStore().then(function (reloaded) {
+      if (!reloaded) resync();
+    });
   }
 
   window.TodoNotify = {

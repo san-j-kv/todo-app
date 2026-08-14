@@ -24,6 +24,21 @@
 
         </activity>
 
+        <!-- "Mark done" on a reminder, handled without opening the app. The
+             patched local-notifications plugin sends action buttons here as a
+             package-scoped broadcast instead of launching MainActivity.
+
+             exported="false" plus the setPackage() on the sending side keeps it
+             unreachable from other apps. No android:process: TaskStore's lock
+             only orders writers within one process. -->
+        <receiver
+            android:name=".TaskActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.sanjkv.todo.NOTIF_ACTION" />
+            </intent-filter>
+        </receiver>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

@@ -1,0 +1,28 @@
+diff --git a/node_modules/@capacitor/local-notifications/android/src/main/java/com/capacitorjs/plugins/localnotifications/LocalNotificationManager.java b/node_modules/@capacitor/local-notifications/android/src/main/java/com/capacitorjs/plugins/localnotifications/LocalNotificationManager.java
+index 0b826a5..ff825fd 100644
+--- a/node_modules/@capacitor/local-notifications/android/src/main/java/com/capacitorjs/plugins/localnotifications/LocalNotificationManager.java
++++ b/node_modules/@capacitor/local-notifications/android/src/main/java/com/capacitorjs/plugins/localnotifications/LocalNotificationManager.java
+@@ -260,8 +260,21 @@ public class LocalNotificationManager {
+             NotificationAction[] actionGroup = storage.getActionGroup(actionTypeId);
+             for (NotificationAction notificationAction : actionGroup) {
+                 // TODO Add custom icons to actions
+-                Intent actionIntent = buildIntent(localNotification, notificationAction.getId());
+-                PendingIntent actionPendingIntent = PendingIntent.getActivity(
++                // PATCH (todo-app): action buttons are delivered as a package-scoped
++                // broadcast instead of launching the activity, so the app can act on
++                // one without its UI appearing. `foreground:false` cannot be honoured
++                // otherwise — NotificationAction has no such field on Android, so the
++                // upstream code opens MainActivity for every button.
++                //
++                // A fresh Intent rather than the one buildIntent() returns: that one
++                // carries an explicit MainActivity component, CATEGORY_LAUNCHER and
++                // activity flags, any of which would stop a receiver matching it.
++                // Only its extras are wanted — the notification id, the action id and
++                // the source JSON. The body-tap intent above stays an activity intent.
++                Intent actionIntent = new Intent(context.getPackageName() + ".NOTIF_ACTION");
++                actionIntent.setPackage(context.getPackageName());
++                actionIntent.putExtras(buildIntent(localNotification, notificationAction.getId()));
++                PendingIntent actionPendingIntent = PendingIntent.getBroadcast(
+                     context,
+                     localNotification.getId() + notificationAction.getId().hashCode(),
+                     actionIntent,

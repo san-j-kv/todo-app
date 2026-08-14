@@ -73,12 +73,22 @@
     return p.importDoc();
   }
 
+  /* The document can change without the web layer touching it: "Mark done" on a
+     reminder is handled by a broadcast receiver that writes the file directly.
+     The plugin announces that; a browser has no such writer, so this no-ops. */
+  function onChanged(cb) {
+    var p = getPlugin();
+    if (!p || !p.addListener) return;
+    p.addListener('storeChanged', cb);
+  }
+
   window.TodoStore = {
     isNative: isNative,
     read: read,
     write: write,
     exportDoc: exportDoc,
     importDoc: importDoc,
+    onChanged: onChanged,
     FALLBACK_KEY: FALLBACK_KEY
   };
 })();

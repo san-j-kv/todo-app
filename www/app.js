@@ -363,6 +363,52 @@
     });
   }
 
+  /* Re-reads the document after something outside the WebView wrote it. The
+     "Mark done" receiver is the only such writer: it completes the task, rolls
+     a recurring one forward and arms the next reminder, all while the app is
+     closed or in the background.
+
+     applyDoc() is deliberately not reused. It *concatenates* the in-memory list
+     onto what it read, which is right on boot — ids handed out while the read
+     was in flight must survive — and wrong here, where the stored document is
+     the newer copy and the in-memory one is what's stale.
+
+     Silent by design: it repaints rather than toasting. The user marked the
+     task done from the notification and already knows.
+
+     Resolves true when the list was actually replaced. */
+  function reloadFromStore() {
+    // A remembered read failure must not be walked back into, and a write still
+    // in flight is newer than anything on disk.
+    if (loadFailed || pendingText !== null) return Promise.resolve(false);
+
+    var reading;
+    try {
+      reading = store().read();
+    } catch (err) {
+      return Promise.resolve(false);
+    }
+
+    return reading.then(function (text) {
+      if (typeof text !== 'string') return false;
+
+      var data = JSON.parse(text);
+      var raw = Array.isArray(data.tasks) ? data.tasks : [];
+      var seen = {};
+
+      // The receiver mints notifIds from the same counter; take the higher.
+      notifSeq = Math.max(notifSeq, Number(data.notifSeq) || 0);
+      tasks = raw.map(function (t) { return normalizeTask(t, seen); }).filter(Boolean);
+
+      render();
+      if (window.TodoNotify) TodoNotify.resync();
+      return true;
+    }).catch(function () {
+      // Unreadable or unparseable: keep showing the list we already have.
+      return false;
+    });
+  }
+
   // The only way out of loadFailed, and deliberately a decision the user makes:
   // it writes an empty list over whatever is down there.
   function startFresh() {
@@ -1551,6 +1597,7 @@
     openTaskModal: openTaskModal, toggleComplete: toggleComplete, deleteTask: deleteTask,
     render: render,
     load: load, // returns a Promise now — the document is read asynchronously
+    reloadFromStore: reloadFromStore,
     importText: importText,
     LEGACY_TASKS_KEY: LEGACY_TASKS_KEY,
     LEGACY_SEQ_KEY: LEGACY_SEQ_KEY,
@@ -1599,6 +1646,14 @@
     }
 
     render();
+
+    // The "Mark done" receiver writes the document from outside the WebView. If
+    // the app is merely backgrounded it is still running and still holding the
+    // old list, so the plugin tells us and we re-read. A killed app has no
+    // listener and does not need one — its next launch reads the file anyway.
+    if (window.TodoStore && TodoStore.onChanged) {
+      TodoStore.onChanged(function () { reloadFromStore(); });
+    }
 
     if (window.TodoNotify) {
       // Forced: a cold start may follow a force-stop or an OEM background kill,

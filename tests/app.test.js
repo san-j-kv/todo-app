@@ -55,7 +55,14 @@ function makeBridge(permission) {
   let inbox = { cancelled: true };
   let exportSaved = true;
 
+  // The receiver-driven paths: TodoStore announces a document written outside
+  // the WebView, App announces a return to the foreground. Captured rather than
+  // fired, so a suite that never touches them behaves exactly as before.
+  const storeListeners = {};
+  const appListeners = {};
+
   const TodoStore = {
+    addListener: (name, cb) => { storeListeners[name] = cb; return Promise.resolve({ remove() {} }); },
     read: () => {
       if (store.failRead) return Promise.reject(new Error('read failed'));
       // {} rather than {value: null} when there is no file — JSObject drops a
@@ -81,10 +88,14 @@ function makeBridge(permission) {
     Plugins: {
       LocalNotifications,
       TodoStore,
-      App: { addListener: () => Promise.resolve({ remove() {} }) }
+      App: {
+        addListener: (name, cb) => { appListeners[name] = cb; return Promise.resolve({ remove() {} }); }
+      }
     },
     __scheduled: scheduled,
     __listeners: listeners,
+    __storeListeners: storeListeners,
+    __appListeners: appListeners,
     __calls: calls,
     // `doc` lives in a closure, so these are accessors rather than a plain ref.
     get __doc() { return store.doc; },
@@ -245,6 +256,91 @@ module.exports = async function run(t) {
     t.check('kept the same notification id', only(bridge).id, 4242);
     t.check('the completed occurrence was archived',
       w.__todo.getTasks().filter((x) => x.completed).length, 1);
+  }
+
+  /* On Android, "Mark done" is handled by TaskActionReceiver, which rewrites
+     tasks.json while the WebView holds a stale list. These cover the web half
+     of that: the plugin's storeChanged event and the return to the foreground.
+     The receiver itself is Java and out of reach here — RecurrenceTest covers
+     the date math it depends on. */
+  t.section('a document rewritten outside the WebView is picked up');
+  {
+    const { w, bridge } = await boot('granted', [
+      seed({ id: 'a', name: 'Standup', date: iso(today), time: '09:00', notifId: 1 })
+    ]);
+
+    t.check('booted with its one task', w.__todo.getTasks().length, 1);
+    t.check('a store listener was registered', typeof bridge.__storeListeners.storeChanged, 'function');
+
+    // What the receiver leaves behind: the task completed, plus one it minted.
+    bridge.__doc = JSON.stringify({
+      version: 2,
+      notifSeq: 7,
+      tasks: [
+        {
+          id: 'a', name: 'Standup', date: iso(today), time: '09:00', day: '', category: '',
+          completed: true, completedAt: '2026-08-14T09:00:00.000Z', recurrence: null, notifId: 1
+        },
+        {
+          id: 'b', name: 'Archived occurrence', date: '', time: '', day: '', category: '',
+          completed: false, completedAt: null, recurrence: null, notifId: 7
+        }
+      ],
+      updatedAt: '2026-08-14T09:00:00.000Z'
+    });
+
+    const writes = bridge.__calls.write;
+    bridge.__storeListeners.storeChanged();
+    await settle();
+
+    const list = w.__todo.getTasks();
+    t.check('the list was replaced, not concatenated', list.length, 2);
+    t.check('the background completion came across', String(list.find((x) => x.id === 'a').completed), 'true');
+    t.check('and the task that came with it', list.find((x) => x.id === 'b').name, 'Archived occurrence');
+    t.check('a reload writes nothing by itself', bridge.__calls.write, writes);
+    t.check('the completed card was rendered',
+      w.document.querySelectorAll('#completedList [data-card]').length, 1);
+  }
+
+  t.section('a failed reload leaves the list alone');
+  {
+    const { w, bridge } = await boot('granted', [seed({ id: 'a', name: 'Mine', notifId: 1 })]);
+    bridge.__failRead = true;
+    const writes = bridge.__calls.write;
+
+    bridge.__storeListeners.storeChanged();
+    await settle();
+
+    t.check('the task survived', w.__todo.getTasks().length, 1);
+    t.check('and is still itself', w.__todo.getTasks()[0].name, 'Mine');
+    t.check('nothing was written over it', bridge.__calls.write, writes);
+  }
+
+  t.section('returning to the foreground re-reads the document');
+  {
+    const { w, bridge } = await boot('granted', [seed({ id: 'a', name: 'Mine', notifId: 1 })]);
+    t.check('an appStateChange listener was registered',
+      typeof bridge.__appListeners.appStateChange, 'function');
+
+    bridge.__doc = JSON.stringify({
+      version: 2,
+      notifSeq: 3,
+      tasks: [{
+        id: 'a', name: 'Renamed in the background', date: '', time: '', day: '', category: '',
+        completed: false, completedAt: null, recurrence: null, notifId: 1
+      }],
+      updatedAt: '2026-08-14T09:00:00.000Z'
+    });
+
+    // Going away is not coming back — only isActive should re-read.
+    bridge.__appListeners.appStateChange({ isActive: false });
+    await settle();
+    t.check('a background transition does not reload', w.__todo.getTasks()[0].name, 'Mine');
+
+    bridge.__appListeners.appStateChange({ isActive: true });
+    await settle();
+    t.check('coming back does', w.__todo.getTasks()[0].name, 'Renamed in the background');
+    t.check('still exactly one task', w.__todo.getTasks().length, 1);
   }
 
   t.section('stale recurring series recovers after the app was closed');

@@ -34,6 +34,44 @@ public class TodoStorePlugin extends Plugin {
     /** Enough for any plausible task list; a guard against picking a video. */
     private static final int MAX_IMPORT_BYTES = 16 * 1024 * 1024;
 
+    /**
+     * The live instance, for callers that have a Context but no bridge —
+     * TaskActionReceiver writes the document behind the WebView's back and has
+     * to say so. Null whenever the app is not running, which is the ordinary
+     * case: the web layer then reads the new document on its next launch.
+     *
+     * <p>Same static-handle pattern the notifications plugin uses for its own
+     * receivers. Cleared in handleOnDestroy so a dead bridge is never called.
+     */
+    private static volatile TodoStorePlugin instance;
+
+    @Override
+    public void load() {
+        super.load();
+        instance = this;
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        if (instance == this) {
+            instance = null;
+        }
+        super.handleOnDestroy();
+    }
+
+    /** Tells a running WebView the document changed underneath it. */
+    static void notifyChanged() {
+        TodoStorePlugin live = instance;
+        if (live == null) {
+            return;
+        }
+        try {
+            live.notifyListeners("storeChanged", new JSObject(), true);
+        } catch (Exception ignored) {
+            // A bridge torn down mid-call is not worth failing the write over.
+        }
+    }
+
     @PluginMethod
     public void read(PluginCall call) {
         try {

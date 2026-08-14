@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "postinstall": "patch-package",
     "test": "node tests/run.js",
+    "test:android": "cd android && .\\gradlew.bat testDebugUnitTest",
     "sync": "cap sync",
     "open:android": "cap open android",
     "open:ios": "cap open ios",
@@ -20,9 +22,10 @@
     "@capacitor/cli": "^8.5.0",
     "@capacitor/core": "^8.5.0",
     "@capacitor/ios": "^8.5.0",
-    "@capacitor/local-notifications": "^8.2.1"
+    "@capacitor/local-notifications": "8.2.1"
   },
   "devDependencies": {
-    "jsdom": "^30.0.1"
+    "jsdom": "^30.0.1",
+    "patch-package": "^8.0.1"
   }
 }
