@@ -463,6 +463,15 @@
   // card is re-rendered away into the Completed section.
   function commitAfterCheck() { save(); setTimeout(render, 260); }
 
+  /* Clears a banner this task has already posted. Deliberately separate from
+     save() → sync(): sync() only ever sees reminders that are still *pending*,
+     and a notification stops being pending the moment it fires, so the three
+     mutations that call this are the only chance to get a stale banner out of
+     the shade. Fire and forget — TodoNotify.dismiss swallows its own errors. */
+  function dismissBanner(id) {
+    if (window.TodoNotify && TodoNotify.dismiss) TodoNotify.dismiss(id);
+  }
+
   /* A backup carries the notifIds of the device it came from, so a merge can
      land one that a local task is already using — and since the notification
      id is the cancel/reschedule handle, the collision would silently drop one
@@ -1060,7 +1069,17 @@
       existing.day = date ? dayName(date) : '';
       existing.category = category;
       existing.recurrence = draftRecurrence;
+      /* Editing a task is an acknowledgement of it, so whatever its old
+         reminder left in the shade is stale — whether or not the edit moved
+         the time. Unconditional on purpose: the call is a free no-op when
+         nothing fired, and diffing the old reminder time against the new one
+         would need a pre-mutation snapshot plus a rule for "date cleared
+         entirely", for a strictly worse-defined behaviour. Read inside this
+         block: closeTaskModal() below nulls editingId. */
+      dismissBanner(existing.notifId);
     } else {
+      // A brand-new task has never fired anything, so nothing to dismiss —
+      // which is also what keeps an unrelated add from touching the shade.
       tasks.push({
         id: uid(),
         name: name,
@@ -1171,6 +1190,8 @@
     var task = findTask(id);
     if (!task) return;
 
+    // Un-completing dismisses nothing: no banner belongs to the newly-live
+    // state, and whatever one existed went when the task was completed.
     if (task.completed) {
       task.completed = false;
       task.completedAt = null;
@@ -1198,6 +1219,12 @@
         // rescheduled onto the new date rather than cancelled and re-armed.
         task.date = next;
         task.day = dayName(next);
+        // This occurrence's banner goes, while commitAfterCheck() re-arms the
+        // same notifId for `next` in the same tick. Only a delivered-side
+        // dismissal can do that — cancelling would take the new alarm with it.
+        // The archived copy above needs nothing: its notifId is freshly minted
+        // and was never scheduled.
+        dismissBanner(task.notifId);
         commitAfterCheck();
         toast('Done — next one on ' + formatDate(next));
         return;
@@ -1206,6 +1233,7 @@
 
     task.completed = true;
     task.completedAt = new Date().toISOString();
+    dismissBanner(task.notifId);
     commitAfterCheck();
   }
 
@@ -1215,6 +1243,12 @@
     if (index === -1) return;
 
     var removed = tasks.splice(index, 1)[0];
+    /* The task is gone; its banner goes with it. Undo below puts the task back
+       and save() re-arms the alarm if the reminder is still ahead, but the
+       banner is deliberately not restored: a banner is the record of a moment
+       that has already passed, and re-posting it would announce a reminder for
+       a time now behind us. If nothing had fired there was no banner to lose. */
+    dismissBanner(removed.notifId);
     commit();
 
     toast('Deleted "' + removed.name + '"', {

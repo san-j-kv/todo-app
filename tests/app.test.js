@@ -15,8 +15,16 @@ const { ROOT, toISO, addDays, fireTime } = require('./harness');
    assumption the cold-start suite below deliberately violates. */
 function makeBridge(permission) {
   const scheduled = new Map();
+  /* What is actually sitting in the notification shade. Kept separate from
+     `scheduled` because the plugin erases its own record of a notification the
+     instant it fires (TimedNotificationPublisher) while the banner lives on —
+     the exact gap that let a deleted task's banner survive forever. */
+  const delivered = new Map();
   const listeners = {};
-  const calls = { schedule: 0, cancel: 0, requestPermissions: 0, createChannel: 0, write: 0 };
+  const calls = {
+    schedule: 0, cancel: 0, requestPermissions: 0, createChannel: 0, write: 0,
+    removeDelivered: 0, removeAllDelivered: 0
+  };
 
   const LocalNotifications = {
     checkPermissions: () => Promise.resolve({ display: permission }),
@@ -38,12 +46,43 @@ function makeBridge(permission) {
     }),
     schedule: (opts) => {
       calls.schedule++;
-      opts.notifications.forEach((n) => scheduled.set(Number(n.id), n));
+      opts.notifications.forEach((n) => {
+        /* LocalNotificationManager.schedule() calls dismissVisibleNotification(id)
+           before arming — so re-scheduling an id silently clears any banner it
+           already has. Modelled because it bounds what the targeted dismissal
+           can promise: a reminder that sync re-arms (any recurring task, or one
+           moved to a future date) loses its banner on the next sync no matter
+           what this app does. Only a banner that is never re-armed — a past
+           one-off — survives untouched, which is the case the sections below
+           lean on. */
+        delivered.delete(Number(n.id));
+        scheduled.set(Number(n.id), n);
+      });
       return Promise.resolve();
     },
     cancel: (opts) => {
       calls.cancel++;
-      opts.notifications.forEach((n) => scheduled.delete(Number(n.id)));
+      opts.notifications.forEach((n) => {
+        scheduled.delete(Number(n.id));
+        // The real cancel() calls dismissVisibleNotification() as well. Modelled
+        // so a test can never mistake a cancel for the targeted dismissal.
+        delivered.delete(Number(n.id));
+      });
+      return Promise.resolve();
+    },
+    getDeliveredNotifications: () => Promise.resolve({
+      notifications: [...delivered.values()].map((n) => ({ id: n.id, title: n.title, tag: null }))
+    }),
+    removeDeliveredNotifications: (opts) => {
+      calls.removeDelivered++;
+      ((opts && opts.notifications) || []).forEach((n) => delivered.delete(Number(n.id)));
+      return Promise.resolve();
+    },
+    // The app must never reach for this — a test below pins it at 0, which is
+    // the guard against anyone "simplifying" the fix into a global sweep.
+    removeAllDeliveredNotifications: () => {
+      calls.removeAllDelivered++;
+      delivered.clear();
       return Promise.resolve();
     }
   };
@@ -93,6 +132,18 @@ function makeBridge(permission) {
       }
     },
     __scheduled: scheduled,
+    __delivered: delivered,
+    /* Simulates the alarm going off, exactly as TimedNotificationPublisher does
+       it: the banner is posted and the plugin's own record is erased in the same
+       breath. That is why getPending() stops reporting it, why sync()'s diff can
+       never cancel it, and why the banner used to survive forever. */
+    __fire(id) {
+      const n = scheduled.get(Number(id));
+      if (!n) return false;
+      scheduled.delete(Number(id));
+      delivered.set(Number(id), { id: Number(id), title: n.title });
+      return true;
+    },
     __listeners: listeners,
     __storeListeners: storeListeners,
     __appListeners: appListeners,
@@ -219,6 +270,148 @@ module.exports = async function run(t) {
     w.__todo.deleteTask(task.id);
     await settle();
     t.check('deleting cancels the reminder', bridge.__scheduled.size, 0);
+  }
+
+  /* ── a reminder that has already fired ──────────────────────────────────
+     Once an alarm goes off the plugin erases its own record of it, so the
+     notification is no longer pending and sync()'s diff can never reach it.
+     Only a delivered-side dismissal can clear the banner, and only the task
+     the user actually touched should lose one. */
+
+  // Fired an hour ago: the date is past, so nothing is armed and nothing will
+  // be re-armed — leaving __scheduled.size === 0 as a stable invariant while
+  // the banner sits in the shade.
+  const firedSeed = (over) => seed(Object.assign({
+    id: 'a', name: 'Overdue', date: iso(addDays(today, -1)), time: '09:00', notifId: 11
+  }, over));
+  const withBanner = (id) => (b) => b.__delivered.set(id, { id: id, title: 'Overdue' });
+
+  t.section('a fired banner is dismissed when the task is deleted');
+  {
+    const { w, bridge } = await boot('granted', [firedSeed()], withBanner(11));
+    t.check('a past reminder arms nothing', bridge.__scheduled.size, 0);
+    t.check('booting leaves the banner alone', bridge.__delivered.size, 1);
+    t.check('and dismisses nothing', bridge.__calls.removeDelivered, 0);
+
+    w.__todo.deleteTask('a');
+    await settle();
+    t.check('deleting clears the banner', bridge.__delivered.size, 0);
+    t.check('via the delivered API', bridge.__calls.removeDelivered, 1);
+    t.check('the shade was not swept wholesale', bridge.__calls.removeAllDelivered, 0);
+
+    // Undo restores the task but deliberately not the banner: a banner records
+    // a moment that has passed, and re-posting it would announce a reminder for
+    // a time now behind us.
+    w.document.querySelector('#toastRegion .toast-action').click();
+    await settle();
+    t.check('undo restores the task', w.__todo.getTasks().length, 1);
+    t.check('but not the banner', bridge.__delivered.size, 0);
+  }
+
+  t.section('a fired banner is dismissed when the task is completed');
+  {
+    const { w, bridge } = await boot('granted', [firedSeed()], withBanner(11));
+
+    w.__todo.toggleComplete('a');
+    await settle();
+    t.check('completing clears the banner', bridge.__delivered.size, 0);
+    t.check('through the delivered API', bridge.__calls.removeDelivered, 1);
+
+    w.__todo.toggleComplete('a');
+    await settle();
+    t.check('un-completing dismisses nothing further', bridge.__calls.removeDelivered, 1);
+  }
+
+  t.section('a recurring task loses its banner but keeps its alarm');
+  {
+    const recurring = [{
+      id: 'rec-1', name: 'Standup', date: iso(addDays(today, 1)), time: '09:00',
+      completed: false, completedAt: null,
+      recurrence: { type: 'custom', interval: 1, unit: 'day' }, notifId: 4242
+    }];
+    const { w, bridge } = await boot('granted', recurring);
+    t.check('armed at boot', bridge.__scheduled.size, 1);
+
+    // The alarm goes off: banner posted, plugin record erased.
+    t.check('the reminder fired', String(bridge.__fire(4242)), 'true');
+    t.check('and is no longer pending', bridge.__scheduled.size, 0);
+
+    const canc = bridge.__calls.cancel;
+    w.__todo.toggleComplete('rec-1');   // the UI path, not the banner action
+    await settle();
+
+    t.check('the fired banner is gone', bridge.__delivered.size, 0);
+    // Note the banner would have gone here anyway, because sync() re-arms 4242
+    // and schedule() dismisses first — so the check above is not on its own
+    // evidence this app did it. This one is.
+    t.check('and this app asked for it', bridge.__calls.removeDelivered, 1);
+    // The assertion that fails if anyone swaps dismiss() back to p.cancel():
+    // cancelling would have taken the freshly-armed alarm with it.
+    t.check('dismissed, not cancelled', bridge.__calls.cancel, canc);
+    t.check('the next occurrence is armed', bridge.__scheduled.size, 1);
+    t.check('on the same notification id', only(bridge).id, 4242);
+    t.check('for the day after', iso(new Date(only(bridge).schedule.at)), iso(addDays(today, 2)));
+  }
+
+  t.section('editing an overdue task clears its banner and re-arms it');
+  {
+    const { w, bridge } = await boot('granted', [firedSeed()], withBanner(11));
+
+    w.__todo.openTaskModal(w.__todo.getTasks()[0]);
+    w.document.getElementById('dateInput').value = t2;
+    w.document.getElementById('taskSave').click();
+    await settle();
+
+    t.check('the stale banner is gone', bridge.__delivered.size, 0);
+    t.check('through the delivered API', bridge.__calls.removeDelivered, 1);
+    t.check('and the new time is armed', bridge.__scheduled.size, 1);
+    t.check('on the same stable id', only(bridge).id, 11);
+    t.check('at the new date', iso(new Date(only(bridge).schedule.at)), t2);
+  }
+
+  t.section('an unrelated save leaves every banner up');
+  {
+    const { w, bridge } = await boot('granted', [
+      firedSeed(),
+      seed({ id: 'b', name: 'Later', date: t2, time: '09:00', notifId: 12 })
+    ], withBanner(11));
+    t.check('boot dismissed nothing', bridge.__calls.removeDelivered, 0);
+    t.check('the banner survived boot', bridge.__delivered.size, 1);
+
+    addTask(w, 'Unrelated', '', '');
+    await settle();
+    t.check('creating a task dismisses nothing', bridge.__calls.removeDelivered, 0);
+    t.check('the banner is still up', bridge.__delivered.size, 1);
+
+    // Editing a different task takes its own banner, not this one's.
+    w.__todo.openTaskModal(w.__todo.getTasks().filter((x) => x.id === 'b')[0]);
+    w.document.getElementById('nameInput').value = 'Later, renamed';
+    w.document.getElementById('taskSave').click();
+    await settle();
+    t.check('the other task’s banner is untouched', bridge.__delivered.size, 1);
+    t.check('and it is still the right one', [...bridge.__delivered.keys()][0], 11);
+    t.check('the shade was never swept', bridge.__calls.removeAllDelivered, 0);
+  }
+
+  /* The bound on all of the above, found on a real device: the targeting only
+     holds for a banner nothing re-arms. LocalNotificationManager.schedule()
+     dismisses a visible notification before arming its id, so any recurring
+     task — or any task moved to a future date — loses its banner the next time
+     sync() re-schedules it, with the app never asking. Pinned here so the
+     guarantee is not read as broader than it is. */
+  t.section('a re-armed reminder loses its banner without the app asking');
+  {
+    const recurring = [{
+      id: 'rec-2', name: 'Standup', date: iso(addDays(today, 1)), time: '09:00',
+      completed: false, completedAt: null,
+      recurrence: { type: 'custom', interval: 1, unit: 'day' }, notifId: 77
+    }];
+    // The banner is already in the shade as the app starts, and boot force-syncs.
+    const { bridge } = await boot('granted', recurring, withBanner(77));
+
+    t.check('the reminder is armed', bridge.__scheduled.size, 1);
+    t.check('but the banner is gone', bridge.__delivered.size, 0);
+    t.check('and this app never asked', bridge.__calls.removeDelivered, 0);
   }
 
   t.section('8am default for a task with no time');

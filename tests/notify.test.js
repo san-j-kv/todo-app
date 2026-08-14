@@ -82,5 +82,8 @@ module.exports = function run(t) {
 
   t.section('web fallback');
   t.check('sync is inert with no Capacitor bridge', typeof N.sync([]).then, 'function');
+  // Must still hand back a promise rather than throwing: app.js fires this off
+  // on every delete and complete, and a TypeError here would break the save.
+  t.check('dismiss is inert with no Capacitor bridge', typeof N.dismiss(1).then, 'function');
   t.check('state reports non-native', N.state().native, 'false');
 };

@@ -311,6 +311,61 @@
   }
 
   /* ─────────────────────────────────────────────────────────────
+     Dismissing a banner that has already fired
+     ───────────────────────────────────────────────────────────── */
+
+  /* sync() structurally cannot do this. The plugin erases a notification from
+     its own record the instant it fires — TimedNotificationPublisher, and this
+     app always schedules by `at` with no cron, so that branch always runs. A
+     fired reminder is therefore never reported by getPending(), never lands in
+     sync()'s `stale` list, and never reaches p.cancel() — which is the only
+     call that takes a visible banner down. The banner then sits in the shade
+     forever, even after its task is deleted.
+
+     Deliberately not p.cancel(): that also cancels the AlarmManager entry and
+     deletes the stored record. In the recurring case the live task keeps its
+     notifId and is re-armed for the next occurrence in the same tick, so
+     cancel() would race the reschedule and could kill the alarm just set.
+     removeDeliveredNotifications() maps straight onto NotificationManager
+     .cancel(id) — shade only, no alarm, no record — which makes the ordering
+     against sync() irrelevant. It is what TaskActionReceiver.dismiss() already
+     does natively for "Mark done"; this is the same policy for the UI paths.
+
+     Known bound, found on a device: this only decides the fate of a banner that
+     nothing re-arms. LocalNotificationManager.schedule() dismisses a visible
+     notification before arming its id, so a recurring task — or one moved to a
+     future date — loses its banner the next time sync() re-schedules it, with
+     or without this call. Only a past one-off, never re-armed, is genuinely
+     left alone until its own task is touched. */
+  function dismiss(id) {
+    var p = getPlugin();
+    // No bridge at all in a plain browser, and an older plugin build may not
+    // have the method. Either way this is a no-op that still returns a promise,
+    // so a caller can chain and the jsdom suite never sees a TypeError.
+    if (!p || typeof p.removeDeliveredNotifications !== 'function') return Promise.resolve();
+
+    var n = Number(id);
+    if (!isFinite(n)) return Promise.resolve();
+
+    // No tag key: the plugin branches on tag == null to reach cancel(id).
+    // No getDeliveredNotifications() pre-check either — cancelling an id with
+    // no banner showing is a documented no-op, and enumerating the shade first
+    // would cost a round trip and add a race.
+    try {
+      // Promise.resolve wraps a stub that hands back undefined.
+      return Promise.resolve(p.removeDeliveredNotifications({ notifications: [{ id: n }] }))
+        .catch(function (err) {
+          // Same posture as sync(): a shade that failed to clear is not worth
+          // breaking a save over.
+          if (window.console && console.warn) console.warn('[notify] dismiss failed', err);
+        });
+    } catch (err) {
+      if (window.console && console.warn) console.warn('[notify] dismiss failed', err);
+      return Promise.resolve();
+    }
+  }
+
+  /* ─────────────────────────────────────────────────────────────
      Init
      ───────────────────────────────────────────────────────────── */
 
@@ -424,6 +479,7 @@
     init: init,
     sync: sync,
     resync: resync,
+    dismiss: dismiss,
     // Exposed for console poking and the checks in the plan.
     notifyMsFor: notifyMsFor,
     nextFutureMs: nextFutureMs,
