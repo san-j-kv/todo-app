@@ -39,24 +39,27 @@ module.exports = function run(t) {
   t.check('no UTC drift — date part survives',
     iso(new Date(N.notifyMsFor('2026-08-13', ''))), '2026-08-13');
 
-  t.section('nextFutureMs — past dates and recurrence recovery');
+  t.section('nextFutureMs — a recurrence never rolls forward on its own');
   t.check('past one-off is not scheduled',
     N.nextFutureMs({ date: yesterday, time: '09:00' }), 'null');
   t.check('future one-off is scheduled',
     N.nextFutureMs({ date: tomorrow, time: '09:00' }) > Date.now(), 'true');
 
-  // A weekly task last touched 60 days ago: the stored date is long past, but
-  // the reminder we arm must still land in the future.
+  /* A weekly task last touched 60 days ago. This used to walk the series
+     forward and arm the next occurrence, which left the card saying Overdue
+     for one date while the alarm pointed at another. An occurrence nobody
+     completed is now left exactly where it is: overdue, arming nothing, until
+     the user ticks it. saveTask() covers the one case where skipping ahead is
+     right — a task given a time that was already past when it was written. */
   const stale = iso(addDays(today, -60));
   const weekly = { date: stale, time: '09:00', recurrence: { type: 'custom', interval: 1, unit: 'week' } };
-  const rolled = N.nextFutureMs(weekly);
-  t.check('stale weekly rolls forward past now', rolled > Date.now(), 'true');
-  t.check('stale weekly lands within 7 days', rolled - Date.now() < 7 * 86400000 + 1000, 'true');
-  t.check('roll-forward does not mutate the task', weekly.date, stale);
-
-  const wkMs = N.nextFutureMs({ date: stale, time: '09:00', recurrence: { type: 'workweek' } });
-  const wkDay = new Date(wkMs).getDay();
-  t.check('workweek lands Mon-Fri', wkDay >= 1 && wkDay <= 5, 'true');
+  t.check('a missed weekly arms nothing', N.nextFutureMs(weekly), 'null');
+  t.check('and the task is left alone', weekly.date, stale);
+  t.check('a missed workweek arms nothing',
+    N.nextFutureMs({ date: stale, time: '09:00', recurrence: { type: 'workweek' } }), 'null');
+  t.check('a future recurring occurrence is still scheduled',
+    N.nextFutureMs({ date: tomorrow, time: '09:00',
+                    recurrence: { type: 'custom', interval: 1, unit: 'day' } }) > Date.now(), 'true');
 
   t.section('desiredFor — eligibility and the iOS 64 cap');
   const base = { id: 'a', notifId: 1, name: 'x', date: tomorrow, time: '09:00', completed: false };

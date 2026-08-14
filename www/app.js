@@ -141,6 +141,37 @@
     return null;
   }
 
+  /* When a reminder for this date+time would fire, in notify.js's terms rather
+     than msFor()'s — a missing time means 08:00, not end of day. Asked of
+     notify.js itself so the two can't drift: the question being settled is
+     "has this occurrence's reminder already gone?", and only notify.js gets to
+     define that. */
+  function reminderMs(date, time) {
+    if (window.TodoNotify && TodoNotify.notifyMsFor) return TodoNotify.notifyMsFor(date, time);
+    return msFor(date, time);
+  }
+
+  /* Where a recurring series should start when it is given a time already
+     behind us. Adding "daily 09:00" at 16:00 means "from the next one", not
+     "you have already missed today" — no reminder ever existed for that slot.
+
+     Only saveTask() calls this, and that is the whole design: a genuinely
+     missed occurrence is one nothing has touched, so it keeps its date, shows
+     as overdue and arms nothing until it is completed. Rolling it forward
+     anywhere else would be the app deciding to skip an occurrence on the
+     user's behalf, which is what nextFutureMs() used to do. */
+  function startOccurrence(date, time, rule) {
+    if (!date || !rule) return date;
+    for (var i = 0; i < MAX_ROLL; i++) {
+      var ms = reminderMs(date, time);
+      if (ms === null || ms > Date.now()) return date;
+      var next = nextOccurrence(date, rule);
+      if (!next) return date;
+      date = next;
+    }
+    return date;
+  }
+
   // Advance past "now" so a task left unchecked for weeks doesn't roll
   // forward into another past date.
   function rollForward(task) {
@@ -1049,6 +1080,10 @@
       return;
     }
     if (!TIME_RE.test(time || '')) time = '';
+
+    // Saying "repeat daily at 09:00" at 16:00 starts the series tomorrow, not
+    // on an occurrence that was over before the task existed.
+    date = startOccurrence(date, time, draftRecurrence);
 
     var category = $('categoryInput').value;
     if (category === NEW_CATEGORY) {

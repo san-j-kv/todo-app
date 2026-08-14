@@ -23,9 +23,6 @@
   // arbitrary subset.
   var MAX_PENDING = 60;
 
-  // Walking a recurrence forward is bounded, same as MAX_ROLL in app.js.
-  var MAX_ROLL = 500;
-
   var plugin = null;
   var ready = false;      // init() finished and permission is granted
   var permission = null;  // 'granted' | 'denied' | 'prompt' | null
@@ -89,31 +86,25 @@
     return dt.getTime();
   }
 
-  /* Read-only sibling of rollForward() in app.js: finds the first occurrence
-     still in the future without mutating the task. This is what lets a
-     recurring series recover after the app has been shut for weeks — the
-     stored date is stale, but the reminder we arm is not. */
+  /* When a task's reminder should next fire — or null for "not at all".
+
+     A recurrence gets no special treatment here, deliberately. This used to
+     walk a stale series forward so a reminder was armed even for an occurrence
+     the user never dealt with, which meant the card said Overdue for today
+     while the alarm pointed at tomorrow: two different occurrences described
+     at once, and the missed one quietly abandoned.
+
+     A recurring task now advances only when it is completed — in
+     toggleComplete(), or in TaskActionReceiver for "Mark done" on the banner.
+     Until then it stays on the occurrence it is on, shows as overdue and arms
+     nothing, so the series waits for the user rather than rolling on without
+     them. A task created or edited with a time already behind it is rolled to
+     its next occurrence by saveTask() at that moment, so this never sees one:
+     no reminder ever existed for that slot, and it is not a missed one. */
   function nextFutureMs(task) {
     var ms = notifyMsFor(task.date, task.time);
     if (ms === null) return null;
-
-    var now = Date.now();
-    if (ms > now) return ms;
-    if (!task.recurrence) return null;
-
-    var a = api();
-    if (!a || !a.nextOccurrence) return null;
-
-    var iso = task.date;
-    for (var i = 0; i < MAX_ROLL; i++) {
-      var next = a.nextOccurrence(iso, task.recurrence);
-      if (!next) return null;
-      iso = next;
-      ms = notifyMsFor(iso, task.time);
-      if (ms === null) return null;
-      if (ms > now) return ms;
-    }
-    return null;
+    return ms > Date.now() ? ms : null;
   }
 
   function eligible(task) {

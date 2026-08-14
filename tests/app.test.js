@@ -536,16 +536,61 @@ module.exports = async function run(t) {
     t.check('still exactly one task', w.__todo.getTasks().length, 1);
   }
 
-  t.section('stale recurring series recovers after the app was closed');
+  /* A recurring series advances when it is completed, and at no other time.
+     Booting used to walk a stale one forward and arm the next occurrence, so
+     the card said Overdue for a date the alarm had already moved past. Now the
+     missed occurrence simply waits. */
+  t.section('a missed recurring occurrence waits to be completed');
   {
-    const seed = [{
-      id: 'old-1', name: 'Weekly review', date: iso(addDays(today, -40)), time: '09:00',
+    const past = iso(addDays(today, -40));
+    const seeded = [{
+      id: 'old-1', name: 'Weekly review', date: past, time: '09:00',
       completed: false, completedAt: null,
       recurrence: { type: 'custom', interval: 1, unit: 'week' }, notifId: 77
     }];
-    const { bridge } = await boot('granted', seed);
-    t.check('stale series still arms a reminder', bridge.__scheduled.size, 1);
-    t.check('and it is in the future',
+    const { w, bridge } = await boot('granted', seeded);
+    t.check('a missed series arms nothing', bridge.__scheduled.size, 0);
+    t.check('and keeps the date it was on', w.__todo.getTasks()[0].date, past);
+
+    // Completing it is the thing that moves the series on — and re-arms it.
+    w.__todo.toggleComplete('old-1');
+    await settle();
+    t.check('completing arms the next occurrence', bridge.__scheduled.size, 1);
+    t.check('which is in the future',
+      new Date(only(bridge).schedule.at).getTime() > Date.now(), 'true');
+    t.check('and the missed one is archived as done',
+      w.__todo.getTasks().filter((x) => x.completed).length, 1);
+  }
+
+  /* The exception, and the only place the app skips an occurrence: a task
+     given a time that was already behind it. No reminder ever existed for that
+     slot, so it is not a missed one. */
+  t.section('a recurring task written after its time starts at the next occurrence');
+  {
+    const past = iso(addDays(today, -3));
+    const seeded = [{
+      id: 'late-1', name: 'Standup', date: past, time: '09:00',
+      completed: false, completedAt: null,
+      recurrence: { type: 'custom', interval: 1, unit: 'day' }, notifId: 55
+    }];
+    const { w, bridge } = await boot('granted', seeded);
+    t.check('nothing armed while it sits missed', bridge.__scheduled.size, 0);
+
+    // Re-saving through the sheet is a write, so it starts from the next one.
+    // openTaskModal carries the existing recurrence into draftRecurrence.
+    w.__todo.openTaskModal(w.__todo.getTasks()[0]);
+    w.document.getElementById('taskSave').click();
+    await settle();
+
+    // Today if 09:00 is still ahead, otherwise tomorrow — computed rather than
+    // hard-coded, so the suite does not depend on what time it is run.
+    const nineToday = new Date(today); nineToday.setHours(9, 0, 0, 0);
+    const expected = nineToday.getTime() > Date.now() ? iso(today) : iso(addDays(today, 1));
+    t.check('the date moved to the next occurrence',
+      w.__todo.getTasks()[0].date, expected);
+    t.check('and a reminder is armed', bridge.__scheduled.size, 1);
+    t.check('on the same notification id', only(bridge).id, 55);
+    t.check('in the future',
       new Date(only(bridge).schedule.at).getTime() > Date.now(), 'true');
   }
 
