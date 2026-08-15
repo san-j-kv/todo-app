@@ -45,6 +45,13 @@
     a: 1, an: 1, other: 2
   };
 
+  /* Tens words that are really "<digit> a" fused by the speech engine — see
+     parseTime. "two a m" arrives as "twenty m", "nine a m" as "ninety m". */
+  var FUSED_HOUR = {
+    twenty: 2, thirty: 3, forty: 4, fifty: 5,
+    sixty: 6, seventy: 7, eighty: 8, ninety: 9
+  };
+
   var ORDINALS = {
     first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: 7,
     eighth: 8, ninth: 9, tenth: 10, eleventh: 11, twelfth: 12, thirteenth: 13,
@@ -65,9 +72,14 @@
     'make a note to', 'note to', 'set up', 'schedule'
   ];
 
+  /* Words that mark the neighbouring token as a category name, whichever side
+     they land on. Plurals included because the engine supplies them unasked. */
+  var MARKER = { category: 1, categories: 1, list: 1, lists: 1 };
+
   // Words left stranded once the phrase around them has been claimed.
   var STRANDED = ['at', 'on', 'in', 'by', 'the', 'a', 'an', 'of', 'to', 'for',
-    'and', 'this', 'next', 'every', 'repeat', 'repeating', 'starting', 'from'];
+    'and', 'this', 'next', 'every', 'repeat', 'repeating', 'starting', 'from',
+    'category', 'categories', 'list'];
 
   // Politeness, which lands at the end rather than the start.
   var CLOSERS = ['please', 'thanks', 'thank you', 'cheers'];
@@ -256,6 +268,30 @@
 
       if (t === 'noon' || t === 'midday') { claim(ts, i, i + 1); return '12:00'; }
       if (t === 'midnight') { claim(ts, i, i + 1); return '00:00'; }
+
+      /* "8 AM" comes back from Vosk as "eighty m" — the hour fuses with the
+         "a" into a tens word and orphans the "m". This is not an occasional
+         slip: it happened on every single AM dictation on the test device, so
+         a parser that only understands "eight a m" finds no time at all, which
+         is what it looked like from the outside.
+
+         Safe to reinterpret because a lone "m" after a tens word is not
+         something anyone says — "eighty metres" transcribes as "meters", not
+         "m". Only the exact two-token shape triggers it. */
+      var fused = FUSED_HOUR[t];
+      if (fused) {
+        var after = tok(ts, i + 1);
+        var fusedMer = null;
+        var fusedEnd = 0;
+        if (after === 'm') { fusedMer = 'am'; fusedEnd = i + 2; }
+        else if (after === 'p' && tok(ts, i + 2) === 'm') { fusedMer = 'pm'; fusedEnd = i + 3; }
+        if (fusedMer) {
+          var fusedLead = tok(ts, i - 1);
+          var anchoredFused = fusedLead === 'at' || fusedLead === 'around' || fusedLead === 'by';
+          claim(ts, anchoredFused ? i - 1 : i, fusedEnd);
+          return pad(applyMeridiem(fused, fusedMer)) + ':00';
+        }
+      }
 
       /* "17:30", "5:30 pm", "5:30pm". The meridiem is glued to the digits as
          often as it is spaced, because whether it arrives as one token or two
@@ -523,10 +559,18 @@
            more likely to be part of the task — "call work about the invoice"
            is not the Work category. */
         var lead = tok(ts, i - 1);
-        var prefixed = lead === 'in' || lead === 'under' || lead === 'category' || lead === 'list';
+        var prefixed = MARKER[lead] || lead === 'in' || lead === 'under';
+
+        /* The marker follows the name as often as it precedes it — people say
+           "hygiene category" as readily as "category hygiene", and the engine
+           pluralises it to "categories" about half the time. Either way it is
+           a deliberate signal, so it counts the same as a prefix. */
+        var suffixed = MARKER[tok(ts, end)];
+        if (suffixed) end += 1;
+
         var trailing = end >= ts.length;
-        if (!prefixed && !trailing) continue;
-        if (!prefixed && i === 0) continue;   // the whole utterance is the name
+        if (!prefixed && !suffixed && !trailing) continue;
+        if (!prefixed && !suffixed && i === 0) continue;   // whole utterance is the name
 
         claim(ts, prefixed ? i - 1 : i, end);
         return sorted[c];

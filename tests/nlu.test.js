@@ -163,6 +163,48 @@ module.exports = function (t) {
   t.check('and that partial stays in the name',
     punct('call mum in anniversary').name, 'Call mum in anniversary');
 
+  /* Verbatim transcripts captured from Vosk on a moto g71, not invented. The
+     speaker said "8 AM" every time; the engine returned "eighty m" every time,
+     fusing the hour with the "a" and orphaning the "m". A parser that only
+     knows "eight a m" reports no time at all, which is exactly how it looked
+     from the outside — "it never captures the time". */
+  t.section('real Vosk transcripts');
+  const vosk = (said) => parse(said, { now: NOW, categories: ['Hygiene', 'Groceries'] });
+
+  {
+    const a = vosk('get a haircut sunday eighty m. repeat every three weeks in hygiene');
+    t.check('fused 8am is recovered', a.time, '08:00');
+    t.check('name is clean of the fusion', a.name, 'Get a haircut');
+    t.check('date', a.date, '2026-08-23');
+    t.check('rule', rule(a.recurrence), '3 week');
+    t.check('category', a.category, 'Hygiene');
+  }
+  {
+    // Marker after the name, pluralised by the engine.
+    const b = vosk('get a haircut tomorrow eighty m. repeat every three weeks hygiene category');
+    t.check('suffix marker: time', b.time, '08:00');
+    t.check('suffix marker: category', b.category, 'Hygiene');
+    t.check('suffix marker: name', b.name, 'Get a haircut');
+  }
+  {
+    const c = vosk('get haircut at eighty m. tomorrow repeat every three weeks in hygiene categories');
+    t.check('trailing "categories" is absorbed', c.category, 'Hygiene');
+    t.check('and does not litter the name', c.name, 'Get haircut');
+    t.check('time', c.time, '08:00');
+  }
+
+  t.section('fused hours, the other digits');
+  [
+    ['wake me at sixty m', '06:00'],
+    ['call at ninety m', '09:00'],
+    ['standup at twenty m', '02:00'],
+    ['dinner at seventy p m', '19:00']
+  ].forEach(([said, want]) => {
+    t.check('"' + said + '" -> ' + want, parse(said, { now: NOW }).time, want);
+  });
+  t.check('a real eighty is still not an hour', parse('buy eighty balloons', { now: NOW }).time, '');
+  t.check('and stays in the name', parse('buy eighty balloons', { now: NOW }).name, 'Buy eighty balloons');
+
   t.section('everything at once');
   const full = run('remind me to buy milk tomorrow at 5pm repeat weekly groceries');
   t.check('name', full.name, 'Buy milk');
