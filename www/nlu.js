@@ -475,6 +475,31 @@
      a permanent junk category sitting in the drawer.
      ───────────────────────────────────────────────────────────── */
 
+  /* Reduces a token to the letters and digits in it, which is the only part a
+     speech engine can be expected to produce. Punctuation in a category name
+     is invisible to the ear: "Anniversary / Birthday" is said "anniversary
+     birthday", and comparing raw tokens made that category — the only one in
+     the app it was built for — impossible to reach by voice. */
+  function wordKey(text) {
+    return String(text == null ? '' : text).toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  /* Matches `want` against the tokens from `start`, skipping anything that
+     carries no letters or digits so a stray comma or a literal "/" in the
+     transcript cannot break the run. Returns the index just past the match, or
+     -1. Stops at a claimed token: a category may not be read out of text the
+     date or time pass has already taken. */
+  function matchCategoryAt(ts, start, want) {
+    var i = start;
+    for (var w = 0; w < want.length; w++) {
+      while (i < ts.length && tok(ts, i) !== null && !wordKey(tok(ts, i))) i++;
+      var here = tok(ts, i);
+      if (here === null || wordKey(here) !== want[w]) return -1;
+      i++;
+    }
+    return i;
+  }
+
   function parseCategory(ts, categories) {
     if (!categories || !categories.length) return '';
 
@@ -482,24 +507,28 @@
     var sorted = categories.slice().sort(function (a, b) { return b.length - a.length; });
 
     for (var c = 0; c < sorted.length; c++) {
-      var want = String(sorted[c]).toLowerCase().split(/\s+/);
+      /* Split on any run of non-alphanumerics rather than on whitespace, so
+         "Anniversary / Birthday" and "Anniversary/Birthday" both reduce to the
+         two words someone would actually say. */
+      var want = String(sorted[c]).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+      if (!want.length) continue;   // a category of pure punctuation matches nothing
+
       for (var i = 0; i < ts.length; i++) {
-        var match = true;
-        for (var w = 0; w < want.length; w++) {
-          if (tok(ts, i + w) !== want[w].replace(/[^a-z0-9:/]/g, '')) { match = false; break; }
-        }
-        if (!match) continue;
+        if (!wordKey(tok(ts, i))) continue;   // start on a real word
+
+        var end = matchCategoryAt(ts, i, want);
+        if (end === -1) continue;
 
         /* An unprefixed match has to be at the very end. Mid-sentence it is far
            more likely to be part of the task — "call work about the invoice"
            is not the Work category. */
         var lead = tok(ts, i - 1);
         var prefixed = lead === 'in' || lead === 'under' || lead === 'category' || lead === 'list';
-        var trailing = i + want.length >= ts.length;
+        var trailing = end >= ts.length;
         if (!prefixed && !trailing) continue;
         if (!prefixed && i === 0) continue;   // the whole utterance is the name
 
-        claim(ts, prefixed ? i - 1 : i, i + want.length);
+        claim(ts, prefixed ? i - 1 : i, end);
         return sorted[c];
       }
     }

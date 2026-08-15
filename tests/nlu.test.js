@@ -137,6 +137,32 @@ module.exports = function (t) {
   t.check('unknown category stays in the name', run('buy milk in sundries').name, 'Buy milk in sundries');
   t.check('no categories configured', parse('buy milk in groceries', { now: NOW, categories: [] }).category, '');
 
+  /* Punctuation in a category name is inaudible, so it cannot be required.
+     "Anniversary / Birthday" is a real category from the app this was built
+     for, and comparing raw tokens made it unreachable by voice — the spoken
+     form has no "/" in it and never will. */
+  t.section('categories with punctuation are still speakable');
+  const punct = (said, cats) => parse(said, { now: NOW, categories: cats || ['Anniversary / Birthday'] });
+
+  t.check('spaced slash, said without it',
+    punct('call mum in anniversary birthday').category, 'Anniversary / Birthday');
+  t.check('and the name is left clean',
+    punct('call mum in anniversary birthday').name, 'Call mum');
+  t.check('unspaced slash, said without it',
+    punct('call mum in anniversary birthday', ['Anniversary/Birthday']).category, 'Anniversary/Birthday');
+  t.check('ampersand form',
+    punct('email the invoice in health & fitness', ['Health & Fitness']).category, 'Health & Fitness');
+  t.check('a literal slash in the transcript is skipped, not fatal',
+    punct('call mum in anniversary / birthday').category, 'Anniversary / Birthday');
+  t.check('trailing bare match still works with punctuation',
+    punct('ring the caterers anniversary birthday').category, 'Anniversary / Birthday');
+  t.check('still refuses to invent one',
+    punct('buy milk in groceries').category, '');
+  t.check('partial match is not a match',
+    punct('call mum in anniversary').category, '');
+  t.check('and that partial stays in the name',
+    punct('call mum in anniversary').name, 'Call mum in anniversary');
+
   t.section('everything at once');
   const full = run('remind me to buy milk tomorrow at 5pm repeat weekly groceries');
   t.check('name', full.name, 'Buy milk');
