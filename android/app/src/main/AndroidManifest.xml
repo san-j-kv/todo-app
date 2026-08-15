@@ -59,9 +59,16 @@
         </provider>
     </application>
 
-    <!-- Permissions -->
+    <!-- Permissions
 
-    <uses-permission android:name="android.permission.INTERNET" />
+         No INTERNET, deliberately: this app has never made a network call, and
+         with voice added the absence is load-bearing rather than tidy — it is
+         what makes "the recording cannot leave the device" a guarantee the OS
+         enforces instead of a promise about someone else's code.
+
+         RECORD_AUDIO is declared by the voice flavour only, in
+         src/voice/AndroidManifest.xml, so the plain build asks for no
+         microphone it has no way to use. -->
 
     <!-- Local notifications.
 
