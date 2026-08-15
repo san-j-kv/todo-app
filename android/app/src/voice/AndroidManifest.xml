@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Voice flavour only. Merged into the main manifest for assembleVoice*, and
+     absent from the plain build entirely.
+
+     RECORD_AUDIO is the only thing voice needs. Vosk decodes inside this
+     process against a model bundled in the APK, so there is no external
+     recognition service to reach — hence no <queries> element — and with the
+     app holding no INTERNET permission there is nowhere for the audio to go. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+</manifest>

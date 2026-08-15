@@ -14,6 +14,9 @@ public class MainActivity extends BridgeActivity {
         // cannot auto-register — assets/capacitor.plugins.json is regenerated
         // by `cap sync` from installed npm packages only.
         registerPlugin(TodoStorePlugin.class);
+        // Registers the microphone plugin in the voice flavour and does nothing
+        // in the plain one, which is where the two builds diverge.
+        VoiceSupport.register(this);
         super.onCreate(savedInstanceState);
     }
 }

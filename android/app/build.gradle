@@ -15,7 +15,38 @@ android {
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
+
     }
+
+    /* Voice roughly doubles the download twice over — once for Vosk's native
+       decoder, once for the acoustic model — so it is a flavour rather than a
+       fixture. `plain` is the app as it was before voice existed; `voice` adds
+       the plugin, the Vosk dependency and the bundled model.
+
+       The split is a source-set one: src/plain and src/voice each hold a
+       VoiceSupport class with the same signature, one registering the plugin
+       and one doing nothing. Nothing in src/main knows which it got. */
+    flavorDimensions += 'input'
+    productFlavors {
+        plain {
+            dimension 'input'
+        }
+        voice {
+            dimension 'input'
+            // The Vosk decoder ships four ABIs and a phone can use exactly one.
+            ndk {
+                abiFilters 'arm64-v8a'
+            }
+        }
+    }
+
+    /* No noCompress for the model, deliberately. The usual advice is to exclude
+       model extensions from packaging compression, which applies when native
+       code mmaps them straight out of the APK. Vosk does not: StorageService
+       reads them with AssetManager.open() and copies them to
+       getExternalFilesDir() first, and the decoder then opens real files. So
+       compression is transparent here, and leaving it on is measured at 17 MB
+       off the APK — 50.6 MB rather than 68 MB. */
     buildTypes {
         release {
             minifyEnabled false
@@ -36,6 +67,13 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+
+    // Offline speech recognition, running in this process. jna is not optional:
+    // vosk-android is a JNI binding and reaches the native decoder through it.
+    // voiceImplementation, so the plain build never pulls either one.
+    voiceImplementation 'com.alphacephei:vosk-android:0.3.75@aar'
+    voiceImplementation 'net.java.dev.jna:jna:5.18.1@aar'
+
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
