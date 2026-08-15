@@ -251,13 +251,32 @@
   /* Vosk transcribes the spoken letters as "p m" about as often as "pm", so
      both spellings have to be read, and a two-token match must report how much
      it consumed. */
+  /* "in the morning" / "at night" does a meridiem's job, and it is the natural
+     fallback when "a m" keeps coming back as "eighty m" or "damn" — the words
+     are long enough that the engine gets them right. Wired into the hour parse
+     so "eight in the morning" is 08:00 rather than an hour with no meridiem
+     and the phrase left littering the task name. */
+  var DAY_PART_MERIDIEM = { morning: 'am', afternoon: 'pm', evening: 'pm', night: 'pm' };
+
+  function readDayPart(ts, i) {
+    var j = i;
+    if (tok(ts, j) === 'in' || tok(ts, j) === 'at') j++;
+    if (tok(ts, j) === 'the') j++;
+    var mer = DAY_PART_MERIDIEM[tok(ts, j)];
+    if (!mer) return null;
+    return { value: mer, next: j + 1 };
+  }
+
   function readMeridiem(ts, i) {
     var t = tok(ts, i);
     if (t === 'am' || t === 'pm') return { value: t, next: i + 1 };
     if (t === 'a' || t === 'p') {
       if (tok(ts, i + 1) === 'm') return { value: t + 'm', next: i + 2 };
     }
+    // "o'clock" loses its apostrophe and often arrives as two tokens, "o" then
+    // "clock". Carries no meridiem either way — it only marks the hour as read.
     if (t === 'oclock' || t === 'clock') return { value: null, next: i + 1 };
+    if (t === 'o' && tok(ts, i + 1) === 'clock') return { value: null, next: i + 2 };
     return null;
   }
 
@@ -341,7 +360,10 @@
 
       var trailing = readMeridiem(ts, num.next);
       var anchored = lead === 'at' || lead === 'around' || lead === 'by';
-      if (!trailing && !anchored) continue;
+      /* A period of day following the number anchors it just as well as "at"
+         does — "haircut eight in the morning" is plainly a time, while "buy 6
+         eggs" is plainly not, and the difference is exactly this lookahead. */
+      if (!trailing && !anchored && !readDayPart(ts, num.next)) continue;
 
       // "at 5 30" — a bare two-digit minute right after the hour
       var minute = 0;
@@ -351,6 +373,14 @@
         if (m2 && /^[0-5]\d$/.test(m2)) { minute = Number(m2); end = num.next + 1; }
         var late = readMeridiem(ts, end);
         if (late) { trailing = late; end = late.next; }
+      }
+
+      /* "eight in the morning", "five in the evening". Checked even when an
+         o'clock was already read, since "eight o'clock at night" carries its
+         meridiem here rather than in the o'clock. */
+      if (!trailing || !trailing.value) {
+        var period = readDayPart(ts, end);
+        if (period) { trailing = period; end = period.next; }
       }
 
       claim(ts, anchored ? i - 1 : i, end);

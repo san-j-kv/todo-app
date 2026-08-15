@@ -193,6 +193,35 @@ module.exports = function (t) {
     t.check('time', c.time, '08:00');
   }
 
+  /* Saying "AM" is the unreliable part on this device — the engine returned
+     "eighty m" for it once and "damn" the next time. These are the phrasings
+     that avoid the word entirely, so they are the ones that have to work. */
+  t.section('saying the time without saying "AM"');
+  [
+    ['get a haircut at eight', '08:00'],
+    ['get a haircut at eight in the morning', '08:00'],
+    ['get a haircut at eight o clock', '08:00'],
+    ['get a haircut at eight o clock in the morning', '08:00'],
+    ['get a haircut eight in the morning', '08:00'],
+    ['call at five in the evening', '17:00'],
+    ['call at nine at night', '21:00'],
+    ['call at two in the afternoon', '14:00'],
+    ['call at eleven in the morning', '11:00'],
+    ['call at twelve in the afternoon', '12:00']
+  ].forEach(([said, want]) => {
+    t.check('"' + said + '" -> ' + want, parse(said, { now: NOW }).time, want);
+  });
+  t.check('the period phrase does not litter the name',
+    parse('get a haircut at eight in the morning', { now: NOW }).name, 'Get a haircut');
+  t.check('nor does the bare form',
+    parse('get a haircut eight in the morning', { now: NOW }).name, 'Get a haircut');
+  // Vosk splits o'clock into two tokens; the single-token form only ever
+  // appeared because the fixtures were typed rather than spoken.
+  t.check('two-token "o clock" is consumed too',
+    parse('get a haircut at eight o clock', { now: NOW }).name, 'Get a haircut');
+  t.check('and with a period after it',
+    parse('call at eight o clock at night', { now: NOW }).time, '20:00');
+
   t.section('fused hours, the other digits');
   [
     ['wake me at sixty m', '06:00'],
