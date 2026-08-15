@@ -10,6 +10,7 @@
 const { createReporter } = require('./harness');
 
 const SUITES = [
+  { name: 'nlu     (unit)', load: () => require('./nlu.test') },
   { name: 'notify  (unit)', load: () => require('./notify.test') },
   { name: 'app     (integration, jsdom)', load: () => require('./app.test') }
 ];
