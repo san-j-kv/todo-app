@@ -1031,16 +1031,22 @@
     updateCategoryButton();
   }
 
-  function openTaskModal(task) {
+  /* `prefill` is the voice path: a parsed utterance, in the same field names
+     the sheet uses. Applied here rather than by setting the inputs afterwards
+     so the repeat row and the category button are built from it too, and so
+     the sheet has exactly one way of being populated. Ignored when editing —
+     an existing task always wins over anything that was heard. */
+  function openTaskModal(task, prefill) {
+    var draft = prefill || {};
     editingId = task ? task.id : null;
-    draftRecurrence = task ? task.recurrence : null;
+    draftRecurrence = task ? task.recurrence : (draft.recurrence || null);
 
     $('taskTitle').textContent = task ? 'Edit task' : 'New task';
-    $('nameInput').value = task ? task.name : '';
-    $('dateInput').value = task ? task.date : toISO(new Date());
-    $('timeInput').value = task ? task.time : '';
+    $('nameInput').value = task ? task.name : (draft.name || '');
+    $('dateInput').value = task ? task.date : (draft.date || toISO(new Date()));
+    $('timeInput').value = task ? task.time : (draft.time || '');
     clearTaskErrors();
-    fillCategorySelect(task ? task.category : '');
+    fillCategorySelect(task ? task.category : (draft.category || ''));
     updateRepeatUI();
 
     openModal($('taskOverlay'), closeTaskModal);
@@ -1335,6 +1341,119 @@
   });
 
   $('fab').addEventListener('click', function () { openTaskModal(null); });
+
+  /* ─────────────────────────────────────────────────────────────
+     Voice quick-add
+
+     The mic fills the task sheet and stops there. It never writes: what was
+     heard is shown in the same form as a typed task and goes through the same
+     Save button, so a misrecognised word is one edit away rather than a wrong
+     task already in the list. Speech is lossy enough that the confirmation
+     step is the feature, not an obstacle to it.
+     ───────────────────────────────────────────────────────────── */
+
+  var VOICE_INTRO_KEY = 'todo.voiceIntro.v1';
+  var listening = false;
+
+  function voiceIntroShown() {
+    try { return localStorage.getItem(VOICE_INTRO_KEY) === '1'; } catch (err) { return false; }
+  }
+
+  /* Said before the system microphone prompt, not after it — the OS dialog
+     asks for a permission without explaining what it buys, and this is the one
+     chance to make the privacy claim that justifies granting it. Same shape as
+     the reminders explainer in notify.js. */
+  function explainVoice() {
+    if (voiceIntroShown()) return Promise.resolve(true);
+    return confirmDialog({
+      title: 'Add tasks by voice?',
+      text: 'Say something like “buy milk tomorrow at 5pm” and To Do will fill in the task for you to check. ' +
+            'Speech is recognised on this device by the app itself — the recording never leaves your phone, ' +
+            'and the app has no internet permission to send it anywhere.',
+      buttons: [
+        { label: 'Not now', value: false },
+        { label: 'Continue', value: true, variant: 'btn-primary' }
+      ]
+    }).then(function (choice) {
+      try { localStorage.setItem(VOICE_INTRO_KEY, '1'); } catch (err) { /* private mode — ask again */ }
+      return choice === true;
+    });
+  }
+
+  function closeVoiceOverlay() {
+    listening = false;
+    TodoVoice.stop();
+    closeModal($('voiceOverlay'));
+  }
+
+  function startVoice() {
+    if (listening) return;
+
+    explainVoice().then(function (ok) {
+      if (!ok) return null;
+
+      $('voiceTranscript').textContent = '';
+      $('voiceStatus').textContent = 'Listening…';
+      listening = true;
+      openModal($('voiceOverlay'), closeVoiceOverlay);
+
+      return TodoVoice.start({
+        onPartial: function (text) { $('voiceTranscript').textContent = text || ''; },
+        onResult: useTranscript,
+        onState: function (state) {
+          if (!listening) return;
+          // First run unpacks a 40 MB model out of the APK; without this the
+          // panel just sits there saying "Listening" while nothing happens.
+          if (state === 'preparing') $('voiceStatus').textContent = 'Getting ready…';
+          if (state === 'listening') $('voiceStatus').textContent = 'Listening…';
+          if (state === 'timeout') { closeVoiceOverlay(); toast('Didn’t catch that', { type: 'error' }); }
+        },
+        onError: function (message) {
+          closeVoiceOverlay();
+          toast(message || 'Speech recognition failed', { type: 'error' });
+        }
+      });
+    }).catch(function (err) {
+      closeVoiceOverlay();
+      // A refused microphone arrives here as a rejected start().
+      toast((err && err.message) || 'Voice input is unavailable', { type: 'error' });
+    });
+  }
+
+  function useTranscript(text) {
+    if (!listening) return;   // a late event from a dictation already closed
+    closeVoiceOverlay();
+
+    var said = String(text || '').trim();
+    if (!said) {
+      toast('Didn’t catch that', { type: 'error' });
+      return;
+    }
+
+    // Categories are passed in so a spoken one can only ever resolve to a
+    // category that already exists — see the note in nlu.js.
+    var draft = TodoNLU.parse(said, { categories: allCategories() });
+    if (!draft.name) {
+      toast('Heard “' + said + '”, but no task in it', { type: 'error' });
+      return;
+    }
+
+    openTaskModal(null, draft);
+  }
+
+  $('micFab').addEventListener('click', startVoice);
+  $('voiceCancel').addEventListener('click', closeVoiceOverlay);
+
+  /* The button stays hidden unless the plugin says voice can run: absent in a
+     desktop browser and in the test suite, and absent on any build where the
+     model didn't ship. Nothing here awaits it — the app is usable while the
+     answer is outstanding. */
+  function initVoice() {
+    if (!window.TodoVoice) return;
+    TodoVoice.isAvailable().then(function (status) {
+      $('micFab').hidden = !(status && status.available);
+    }).catch(function () { /* leave it hidden */ });
+  }
 
   /* ─────────────────────────────────────────────────────────────
      Category picker (opened from a card's category chip)
@@ -1732,6 +1851,8 @@
         if (ok) TodoNotify.sync(tasks, true);
       });
     }
+
+    initVoice();
 
     // Overdue chips and relative labels go stale as the clock moves on.
     setInterval(render, 60000);

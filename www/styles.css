@@ -429,6 +429,65 @@ button, input, select { font: inherit; color: inherit; }
 .fab:active { transform: scale(.96); }
 .fab .icon { width: 26px; height: 26px; }
 
+/* Sits above the add button, smaller and quieter: voice is the shortcut, the
+   + is still the primary way in. Stacked rather than side by side so the add
+   button doesn't move depending on whether voice is available. */
+.fab-mic {
+  bottom: calc(92px + env(safe-area-inset-bottom));
+  width: 48px; height: 48px;
+  border-radius: 15px;
+  background: var(--surface);
+  color: var(--blue-700);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .14);
+}
+.fab-mic:hover { box-shadow: 0 10px 22px rgba(15, 23, 42, .18); }
+.fab-mic[hidden] { display: none; }
+.fab-mic .icon { width: 22px; height: 22px; }
+
+/* ─── listening panel ─────────────────────────────────────────── */
+.listening-panel {
+  width: 100%;
+  max-width: 380px;
+  padding: 32px 26px 22px;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  text-align: center;
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  animation: sheetIn .2s var(--ease);
+}
+.overlay.closing .listening-panel { animation: sheetOut .14s var(--ease) forwards; }
+
+.pulse { display: flex; align-items: flex-end; gap: 6px; height: 30px; }
+.pulse span {
+  width: 6px;
+  border-radius: 3px;
+  background: var(--blue-500);
+  animation: bar 1s var(--ease) infinite;
+}
+.pulse span:nth-child(1) { height: 14px; animation-delay: 0s; }
+.pulse span:nth-child(2) { height: 26px; animation-delay: .15s; }
+.pulse span:nth-child(3) { height: 18px; animation-delay: .3s; }
+
+@keyframes bar {
+  0%, 100% { transform: scaleY(.5); opacity: .55; }
+  50%      { transform: scaleY(1);  opacity: 1; }
+}
+
+.listening-status { font-size: 16px; font-weight: 650; }
+
+/* Holds two lines open so the panel doesn't jump as partial results grow and
+   shrink — Vosk revises its guess continuously while someone is talking. */
+.listening-text {
+  min-height: 2.8em;
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--text);
+}
+.listening-text:empty::before { content: '…'; color: var(--muted); }
+.listening-hint { font-size: 13px; color: var(--muted); }
+
 /* ─── modals ──────────────────────────────────────────────────── */
 .overlay {
   position: fixed; inset: 0;

@@ -23,7 +23,7 @@ function makeBridge(permission) {
   const listeners = {};
   const calls = {
     schedule: 0, cancel: 0, requestPermissions: 0, createChannel: 0, write: 0,
-    removeDelivered: 0, removeAllDelivered: 0
+    removeDelivered: 0, removeAllDelivered: 0, voiceStart: 0, voiceStop: 0
   };
 
   const LocalNotifications = {
@@ -121,16 +121,54 @@ function makeBridge(permission) {
     importDoc: () => Promise.resolve(inbox)
   };
 
+  /* Stands in for the app-local TodoVoice plugin — Vosk, in the real thing.
+     Nothing here decodes anything; __say() below plays back a dictation the
+     way the native side reports one, so the tests exercise the web layer's
+     whole path from a transcript to a saved task. */
+  const voiceListeners = {};
+  const voice = { available: true, granted: true };
+
+  const TodoVoice = {
+    addListener: (name, cb) => {
+      voiceListeners[name] = cb;
+      return Promise.resolve({ remove() { delete voiceListeners[name]; } });
+    },
+    isAvailable: () => Promise.resolve({
+      available: voice.available, ready: true, granted: voice.granted
+    }),
+    start: () => {
+      calls.voiceStart++;
+      return voice.granted
+        ? Promise.resolve()
+        : Promise.reject(new Error('Microphone permission is required for voice input'));
+    },
+    stop: () => { calls.voiceStop++; return Promise.resolve(); }
+  };
+
   return {
     isNativePlatform: () => true,
     getPlatform: () => 'android',
     Plugins: {
       LocalNotifications,
       TodoStore,
+      TodoVoice,
       App: {
         addListener: (name, cb) => { appListeners[name] = cb; return Promise.resolve({ remove() {} }); }
       }
     },
+
+    /* One dictation: a partial guess, then the sentence Vosk settled on. Both
+       are emitted because the panel shows the partial, and a test that skipped
+       it would not notice the live transcript breaking. */
+    __say(text) {
+      if (voiceListeners.partial) voiceListeners.partial({ text: String(text).slice(0, 6) });
+      if (voiceListeners.result) voiceListeners.result({ text: text });
+    },
+    __voiceEvent(name, payload) {
+      if (voiceListeners[name]) voiceListeners[name](payload);
+    },
+    set __voiceAvailable(value) { voice.available = value; },
+    set __voiceGranted(value) { voice.granted = value; },
     __scheduled: scheduled,
     __delivered: delivered,
     /* Simulates the alarm going off, exactly as TimedNotificationPublisher does
@@ -183,6 +221,8 @@ async function boot(permission, seedTasks, prime, primeWindow) {
   // this list is the real load order — store.js first, as in the markup.
   w.eval(fs.readFileSync(path.join(ROOT, 'store.js'), 'utf8'));
   w.eval(fs.readFileSync(path.join(ROOT, 'notify.js'), 'utf8'));
+  w.eval(fs.readFileSync(path.join(ROOT, 'nlu.js'), 'utf8'));
+  w.eval(fs.readFileSync(path.join(ROOT, 'voice.js'), 'utf8'));
   w.eval(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'));
   await settle();
   return { w, bridge };
@@ -679,6 +719,128 @@ module.exports = async function run(t) {
     t.check('in-session save cancels nothing', bridge.__calls.cancel, c);
   }
 
+  t.section('voice quick-add fills the sheet and saves through the normal path');
+  {
+    // Intro pre-seeded: the explainer has its own section below.
+    const { w, bridge } = await boot(
+      'granted',
+      [seed({ id: 'a', name: 'Existing', category: 'Work', notifId: 1 })],
+      null,
+      (win) => win.localStorage.setItem('todo.voiceIntro.v1', '1')
+    );
+
+    t.check('mic button appears when the plugin is there',
+      w.document.getElementById('micFab').hidden, 'false');
+
+    w.document.getElementById('micFab').click();
+    await settle();
+    t.check('the listening panel opened', w.document.getElementById('voiceOverlay').hidden, 'false');
+    t.check('the mic was opened', bridge.__calls.voiceStart, 1);
+
+    bridge.__say('buy milk tomorrow at 5pm in work');
+    await settle();
+
+    /* closeModal marks the overlay 'closing' and hides it 150ms later, and
+       settle() can land on either side of that. Both states mean dismissed;
+       asserting one of them specifically would be a coin toss. */
+    const gone = (el) => el.hidden || el.classList.contains('closing');
+    t.check('the listening panel was dismissed',
+      gone(w.document.getElementById('voiceOverlay')), 'true');
+    t.check('the mic was released', bridge.__calls.voiceStop > 0, 'true');
+
+    t.check('the task sheet opened', w.document.getElementById('taskOverlay').hidden, 'false');
+    t.check('name came from the transcript', w.document.getElementById('nameInput').value, 'Buy milk');
+    t.check('date came from the transcript',
+      w.document.getElementById('dateInput').value, iso(addDays(today, 1)));
+    t.check('time came from the transcript', w.document.getElementById('timeInput').value, '17:00');
+    t.check('category matched an existing one',
+      w.document.getElementById('categoryInput').value, 'Work');
+
+    // The whole design rests on this: hearing something writes nothing.
+    t.check('nothing is saved until the user confirms', w.__todo.getTasks().length, 1);
+
+    w.document.getElementById('taskSave').click();
+    await settle();
+
+    const added = w.__todo.getTasks().find((x) => x.name === 'Buy milk');
+    t.check('saving adds it', w.__todo.getTasks().length, 2);
+    t.check('with the parsed time', added.time, '17:00');
+    t.check('with the parsed category', added.category, 'Work');
+    t.check('and it went through the normal save path, so a reminder was armed',
+      bridge.__scheduled.has(added.notifId), 'true');
+  }
+
+  t.section('voice: a spoken repeat becomes a recurrence rule');
+  {
+    const { w, bridge } = await boot('granted', [], null,
+      (win) => win.localStorage.setItem('todo.voiceIntro.v1', '1'));
+
+    w.document.getElementById('micFab').click();
+    await settle();
+    bridge.__say('water the plants every 3 days');
+    await settle();
+    w.document.getElementById('taskSave').click();
+    await settle();
+
+    const added = w.__todo.getTasks()[0];
+    t.check('the task was named', added.name, 'Water the plants');
+    t.check('the rule survived into the saved task',
+      added.recurrence && added.recurrence.interval + ' ' + added.recurrence.unit, '3 day');
+  }
+
+  t.section('voice: nothing heard means nothing happens');
+  {
+    const { w, bridge } = await boot('granted', [], null,
+      (win) => win.localStorage.setItem('todo.voiceIntro.v1', '1'));
+
+    w.document.getElementById('micFab').click();
+    await settle();
+    bridge.__say('');
+    await settle();
+
+    t.check('no task sheet', w.document.getElementById('taskOverlay').hidden, 'true');
+    t.check('no task added', w.__todo.getTasks().length, 0);
+  }
+
+  t.section('voice: the explainer comes before the microphone prompt');
+  {
+    const { w, bridge } = await boot('granted', [], null);
+
+    w.document.getElementById('micFab').click();
+    await settle();
+
+    const text = w.document.getElementById('confirmText').textContent;
+    t.check('explainer shown', w.document.getElementById('confirmOverlay').hidden, 'false');
+    t.check('mic not yet opened', bridge.__calls.voiceStart, 0);
+    t.check('explainer promises the audio stays put',
+      /never leaves your phone/i.test(text), 'true');
+
+    [...w.document.querySelectorAll('#confirmButtons button')]
+      .find((b) => /continue/i.test(b.textContent)).click();
+    await settle();
+    t.check('the mic followed the explainer', bridge.__calls.voiceStart, 1);
+  }
+
+  t.section('voice: a refused microphone is reported, not swallowed');
+  {
+    const { w, bridge } = await boot('granted', [], (b) => { b.__voiceGranted = false; },
+      (win) => win.localStorage.setItem('todo.voiceIntro.v1', '1'));
+
+    w.document.getElementById('micFab').click();
+    await settle();
+
+    const shut = w.document.getElementById('voiceOverlay');
+    t.check('the panel was dismissed', shut.hidden || shut.classList.contains('closing'), 'true');
+    t.check('the user was told', /microphone/i.test(w.document.getElementById('toastRegion').textContent), 'true');
+    t.check('no task sheet opened', w.document.getElementById('taskOverlay').hidden, 'true');
+  }
+
+  t.section('voice: the button is hidden when the model is missing');
+  {
+    const { w } = await boot('granted', [], (b) => { b.__voiceAvailable = false; });
+    t.check('mic button hidden', w.document.getElementById('micFab').hidden, 'true');
+  }
+
   t.section('web build still works with no Capacitor');
   {
     const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
@@ -687,6 +849,8 @@ module.exports = async function run(t) {
     w.localStorage.setItem('todo.tasks.v1', JSON.stringify([seed({ id: 'old', name: 'From before' })]));
     w.eval(fs.readFileSync(path.join(ROOT, 'store.js'), 'utf8'));
     w.eval(fs.readFileSync(path.join(ROOT, 'notify.js'), 'utf8'));
+    w.eval(fs.readFileSync(path.join(ROOT, 'nlu.js'), 'utf8'));
+    w.eval(fs.readFileSync(path.join(ROOT, 'voice.js'), 'utf8'));
     w.eval(fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8'));
     await settle();
     addTask(w, 'Browser task', t2, '09:00');
@@ -699,6 +863,11 @@ module.exports = async function run(t) {
     const doc = JSON.parse(w.localStorage.getItem('todo.store.v1'));
     t.check('browser fallback writes the document', doc.tasks.length, 2);
     t.check('and migrated the old key away', w.localStorage.getItem('todo.tasks.v1'), 'null');
+
+    // Voice is Android-only. A browser has no plugin, so the button must stay
+    // hidden rather than offering something that can only fail.
+    t.check('voice layer reports non-native', w.TodoVoice.isNative(), 'false');
+    t.check('mic button stays hidden with no plugin', w.document.getElementById('micFab').hidden, 'true');
   }
 
   t.section('completed section is collapsed by default');

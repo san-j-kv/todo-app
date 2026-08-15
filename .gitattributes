@@ -6,3 +6,10 @@ gradlew text eol=lf
 # ...and pin the Windows counterparts to CRLF for the same reason.
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# The Vosk speech model is 54 MB of binary that git currently leaves alone only
+# because core.autocrlf happens to be false here. A clone with autocrlf=true, or
+# anyone adding `* text=auto` later, would rewrite bytes inside .mdl/.fst files
+# and the decoder would fail at runtime with nothing pointing back at git.
+# Marked binary so that can't happen: no eol conversion, no diffing.
+android/app/src/voice/assets/model-en/** binary

@@ -6,11 +6,12 @@
   "scripts": {
     "postinstall": "patch-package",
     "test": "node tests/run.js",
-    "test:android": "cd android && .\\gradlew.bat testDebugUnitTest",
+    "test:android": "cd android && .\\gradlew.bat testPlainDebugUnitTest",
     "sync": "cap sync",
     "open:android": "cap open android",
     "open:ios": "cap open ios",
-    "build:android": "cap sync android && cd android && .\\gradlew.bat assembleDebug"
+    "build:android": "cap sync android && cd android && .\\gradlew.bat assembleVoiceDebug",
+    "build:android:plain": "cap sync android && cd android && .\\gradlew.bat assemblePlainDebug"
   },
   "keywords": [],
   "author": "",
