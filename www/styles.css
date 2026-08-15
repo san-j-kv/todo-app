@@ -433,7 +433,10 @@ button, input, select { font: inherit; color: inherit; }
    + is still the primary way in. Stacked rather than side by side so the add
    button doesn't move depending on whether voice is available. */
 .fab-mic {
+  /* 24 (the add button's offset) + 56 (its height) + 12 (gap). The extra 4px
+     on the right centres this 48px button against the 56px one above it. */
   bottom: calc(92px + env(safe-area-inset-bottom));
+  right: calc(max(20px, env(safe-area-inset-right)) + 4px);
   width: 48px; height: 48px;
   border-radius: 15px;
   background: var(--surface);
@@ -845,6 +848,11 @@ body.drawer-open { overflow: hidden; }
 
   .card { padding: 15px 14px; gap: 12px; }
   .fab { right: 18px; bottom: calc(18px + env(safe-area-inset-bottom)); }
+  /* Must follow the .fab rule above, and must exist at all: that rule has the
+     same specificity as .fab-mic and comes later in the file, so without this
+     the mic inherits bottom:18px and sits directly underneath the add button,
+     invisible behind it. Kept in step by hand — 18 + 56 + 12. */
+  .fab-mic { right: 22px; bottom: calc(86px + env(safe-area-inset-bottom)); }
 }
 
 /* very small phones: stack date/time */
