@@ -770,6 +770,72 @@ module.exports = async function run(t) {
       bridge.__scheduled.has(added.notifId), 'true');
   }
 
+  /* Backlog item 11. A marked form — "in X", "under X", "category X",
+     "X category" — may create a category that does not exist yet, and the
+     sheet has to read as creating rather than picking, because that sheet is
+     the only thing standing between a mishearing and a permanent namespace. */
+  t.section('voice: a marked category that does not exist yet is created');
+  {
+    const { w, bridge } = await boot(
+      'granted',
+      [seed({ id: 'a', name: 'Existing', category: 'Work', notifId: 1 })],
+      null,
+      (win) => win.localStorage.setItem('todo.voiceIntro.v1', '1')
+    );
+    const d = w.document;
+
+    d.getElementById('micFab').click();
+    await settle();
+    bridge.__say('buy milk tomorrow in sundries');
+    await settle();
+
+    t.check('the category came out of the name',
+      d.getElementById('nameInput').value, 'Buy milk');
+    t.check('parked behind the new-category sentinel',
+      d.getElementById('categoryInput').value, '__new');
+    t.check('with the spoken name waiting in it',
+      d.getElementById('newCategoryInput').value, 'Sundries');
+    t.check('and the sheet says it would be new',
+      d.getElementById('categoryButtonText').textContent, 'Sundries (new)');
+
+    // Hearing it creates nothing: the category exists only once a task carries it.
+    t.check('the category does not exist yet',
+      w.__todo.getCategories().join(','), 'Work');
+
+    d.getElementById('taskSave').click();
+    await settle();
+
+    t.check('saving creates it',
+      w.__todo.getTasks().find((x) => x.name === 'Buy milk').category, 'Sundries');
+    t.check('and it joined the category list',
+      w.__todo.getCategories().join(','), 'Sundries,Work');
+    t.check('and it reached storage',
+      docOf(bridge).tasks.some((x) => x.category === 'Sundries'), 'true');
+  }
+
+  t.section('voice: an existing category is matched, not recreated');
+  {
+    const { w, bridge } = await boot(
+      'granted',
+      [seed({ id: 'a', name: 'Existing', category: 'Work', notifId: 1 })],
+      null,
+      (win) => win.localStorage.setItem('todo.voiceIntro.v1', '1')
+    );
+    const d = w.document;
+
+    d.getElementById('micFab').click();
+    await settle();
+    bridge.__say('buy milk tomorrow in work');
+    await settle();
+
+    t.check('the existing one is selected',
+      d.getElementById('categoryInput').value, 'Work');
+    t.check('and the button does not call it new',
+      d.getElementById('categoryButtonText').textContent, 'Work');
+    t.check('nothing is parked behind the sentinel',
+      d.getElementById('newCategoryInput').value, '');
+  }
+
   t.section('voice: a spoken repeat becomes a recurrence rule');
   {
     const { w, bridge } = await boot('granted', [], null,
@@ -1046,8 +1112,8 @@ module.exports = async function run(t) {
     d.getElementById('categoryButton').click();
     d.getElementById('pickerNewCategory').value = 'Health';
     d.getElementById('pickerAddCategory').click();
-    t.check('the button shows the invented name',
-      d.getElementById('categoryButtonText').textContent, 'Health');
+    t.check('the button shows the invented name, marked as new',
+      d.getElementById('categoryButtonText').textContent, 'Health (new)');
     t.check('parked behind the new-category sentinel',
       d.getElementById('categoryInput').value, '__new');
 

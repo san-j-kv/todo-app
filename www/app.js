@@ -995,9 +995,10 @@
       sel.appendChild(h('option', { value: name, text: name }));
     });
     sel.appendChild(h('option', { value: NEW_CATEGORY, text: '+ New category…' }));
-    sel.value = names.indexOf(selected) === -1 ? '' : selected;
-    $('newCategoryInput').value = '';
-    updateCategoryButton();
+    /* A name not in the list is not dropped — it goes down the "+ New
+       category" path, which is how a category invented by voice quick-add
+       arrives here. setFormCategory() tells known from new and repaints. */
+    setFormCategory(selected || '');
   }
 
   /* The select is never seen, so the button is what has to read correctly —
@@ -1009,7 +1010,10 @@
 
   function updateCategoryButton() {
     var name = formCategory();
-    $('categoryButtonText').textContent = name || 'Uncategorised';
+    /* Creating and picking look identical otherwise, and voice can now put a
+       name here that nobody typed — so the button has to say which this is. */
+    var creating = name && $('categoryInput').value === NEW_CATEGORY;
+    $('categoryButtonText').textContent = creating ? name + ' (new)' : (name || 'Uncategorised');
     $('categoryButton').classList.toggle('muted', !name);
   }
 
@@ -1430,8 +1434,9 @@
       return;
     }
 
-    // Categories are passed in so a spoken one can only ever resolve to a
-    // category that already exists — see the note in nlu.js.
+    // The existing categories go in so a spoken one matches rather than
+    // duplicates; an unmatched marked form is invented — see the note in
+    // nlu.js. Either way it lands in the sheet, unsaved, for confirmation.
     var draft = TodoNLU.parse(said, { categories: allCategories() });
     if (!draft.name) {
       toast('Heard “' + said + '”, but no task in it', { type: 'error' });
