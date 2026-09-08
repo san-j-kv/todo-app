@@ -63,7 +63,9 @@ over the other.
 
 ## Building
 
-**Requirements:** Node.js, and a **JDK 21** toolchain on `JAVA_HOME`. Gradle
+**Requirements:** Node.js, the Android SDK with `ANDROID_HOME` set (there is no
+`local.properties` in the repo — it is gitignored, and the SDK is located from the
+environment), and a **JDK 21** toolchain on `JAVA_HOME`. Gradle
 8.14.x cannot read the Java 25 runtime that current Android Studio bundles — that
 combination fails with `Unsupported class file major version 69`. See
 `android/gradle.properties` for how to pin it per-machine without editing the
