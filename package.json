@@ -1,8 +1,29 @@
 {
   "name": "todo-app",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Offline task list for Android. Tasks stay on the device — local-only storage, on-device voice quick-add, no network permission.",
+  "keywords": [
+    "todo",
+    "tasks",
+    "android",
+    "capacitor",
+    "offline-first",
+    "privacy",
+    "vosk",
+    "speech-recognition",
+    "local-notifications"
+  ],
+  "author": "san-j-kv",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/san-j-kv/todo-app.git"
+  },
+  "bugs": {
+    "url": "https://github.com/san-j-kv/todo-app/issues"
+  },
+  "homepage": "https://github.com/san-j-kv/todo-app#readme",
+  "type": "commonjs",
   "scripts": {
     "postinstall": "patch-package",
     "test": "node tests/run.js",
@@ -13,10 +34,6 @@
     "build:android": "cap sync android && cd android && .\\gradlew.bat assembleVoiceDebug",
     "build:android:plain": "cap sync android && cd android && .\\gradlew.bat assemblePlainDebug"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "@capacitor/android": "^8.5.0",
     "@capacitor/app": "^8.1.1",
