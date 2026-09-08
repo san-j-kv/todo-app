@@ -536,9 +536,14 @@
   /* ─────────────────────────────────────────────────────────────
      Category
 
-     Only ever matches a category that already exists. Voice is far too lossy
-     to be allowed to invent one — a single misheard word would otherwise leave
-     a permanent junk category sitting in the drawer.
+     Matching an existing category always wins. Only when nothing matches may
+     one be invented, and only from an explicitly marked form: "in X", "under
+     X", "category X", "X category". Never from a bare trailing word, which is
+     exactly where a mishearing lands. Recognition here is lossy enough that
+     "under groceries" once came back as "Had it under groceries", and a
+     category is a namespace: it shows in the drawer, the picker and every
+     later match afterwards. So an invented one is shown in the sheet as
+     "X (new)", and like everything else here it saves nothing on its own.
      ───────────────────────────────────────────────────────────── */
 
   /* Reduces a token to the letters and digits in it, which is the only part a
@@ -566,11 +571,109 @@
     return i;
   }
 
-  function parseCategory(ts, categories) {
-    if (!categories || !categories.length) return '';
+  var MAX_INVENTED_WORDS = 3;
 
+  /* May this token be part of a category name? STRANDED is already the filler
+     list -- "the", "a", "at", "every", and the marker words themselves -- and a
+     weekday, a month or a number is a date the earlier passes merely failed to
+     claim, never a category anyone is asking for. */
+  function isNameWord(ts, i) {
+    var t = tok(ts, i);
+    if (t === null || !wordKey(t)) return false;
+    if (STRANDED.indexOf(t) !== -1) return false;
+    if (WEEKDAYS.indexOf(t) !== -1 || MONTHS.indexOf(t) !== -1) return false;
+    if (typeof CARDINALS[t] === 'number' || typeof ORDINALS[t] === 'number') return false;
+    return !/^\d/.test(t);
+  }
+
+  // Would anything survive to name the task if [from, to) became the category?
+  function hasNameLeft(ts, from, to) {
+    for (var i = 0; i < ts.length; i++) {
+      if (i >= from && i < to) continue;
+      if (!ts[i].used && wordKey(ts[i].norm)) return true;
+    }
+    return false;
+  }
+
+  /* "in home improvement" — both edges are known, the marker on one side and
+     the end of the sentence on the other, so the whole run can be taken. */
+  function prefixedName(ts, i) {
+    var words = [];
+    var j = i + 1;
+    while (words.length < MAX_INVENTED_WORDS && isNameWord(ts, j)) {
+      words.push(wordKey(tok(ts, j)));
+      j++;
+    }
+    if (!words.length) return null;
+
+    /* Unless that would leave nothing to call the task: "in groceries buy
+       milk" is a category and a task, not a three-word category. */
+    if (!hasNameLeft(ts, i, j)) {
+      words = words.slice(0, 1);
+      j = i + 2;
+      if (!hasNameLeft(ts, i, j)) return null;   // the category was all that was said
+    }
+    return { words: words, from: i, to: j };
+  }
+
+  /* "hygiene category" — only the near edge is known, so take exactly one
+     word. Reaching back greedily through "get a haircut ... hygiene category"
+     produces "Haircut Hygiene". */
+  function suffixedName(ts, i) {
+    if (!isNameWord(ts, i - 1)) return null;
+    if (!hasNameLeft(ts, i - 1, i + 1)) return null;
+    return { words: [wordKey(tok(ts, i - 1))], from: i - 1, to: i + 1 };
+  }
+
+  /* A partial mishearing of a multi-word category is the likeliest way a bad
+     one gets created, and it lands right beside the real one — "in anniversary"
+     against an existing "Anniversary / Birthday". Refuse rather than plant it;
+     the words stay in the name, where the user can see what was heard. */
+  function startsAnExisting(words, categories) {
+    for (var c = 0; c < categories.length; c++) {
+      var want = String(categories[c]).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+      if (want.length <= words.length) continue;
+      var same = true;
+      for (var w = 0; w < words.length; w++) {
+        if (words[w] !== want[w]) { same = false; break; }
+      }
+      if (same) return true;
+    }
+    return false;
+  }
+
+  /* A transcript is all lowercase, and this name goes in the drawer next to
+     ones that were typed by hand. */
+  function titleCase(words) {
+    return words.map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(' ');
+  }
+
+  function inventCategory(ts, categories) {
+    var known = categories || [];
+
+    for (var i = 0; i < ts.length; i++) {
+      var t = tok(ts, i);
+      if (t === null) continue;
+
+      /* "in" and "under" only make sense ahead of the name; the MARKER words
+         read as deliberate on either side, which is why matching already
+         accepts both. */
+      if (t !== 'in' && t !== 'under' && !MARKER[t]) continue;
+
+      var found = prefixedName(ts, i);
+      if (!found && MARKER[t]) found = suffixedName(ts, i);
+      if (!found) continue;
+      if (startsAnExisting(found.words, known)) continue;
+
+      claim(ts, found.from, found.to);
+      return titleCase(found.words);
+    }
+    return '';
+  }
+
+  function parseCategory(ts, categories) {
     // Longest first, so "work trips" wins over "work".
-    var sorted = categories.slice().sort(function (a, b) { return b.length - a.length; });
+    var sorted = (categories || []).slice().sort(function (a, b) { return b.length - a.length; });
 
     for (var c = 0; c < sorted.length; c++) {
       /* Split on any run of non-alphanumerics rather than on whitespace, so
@@ -606,7 +709,9 @@
         return sorted[c];
       }
     }
-    return '';
+
+    // Nothing known was said. A marked form may still be asking for a new one.
+    return inventCategory(ts, categories);
   }
 
   /* ─────────────────────────────────────────────────────────────
@@ -650,8 +755,9 @@
      Entry point
      ───────────────────────────────────────────────────────────── */
 
-  /* opts.categories — the live list from allCategories(), so a spoken category
-                       can only ever resolve to one that already exists.
+  /* opts.categories — the live list from allCategories(). A spoken category
+                       resolves to one of these wherever it can, and is only
+                       invented when nothing matches and the form was marked.
      opts.now        — injectable clock; the tests pin it, callers omit it. */
   function parse(transcript, opts) {
     opts = opts || {};

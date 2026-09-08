@@ -133,9 +133,9 @@ module.exports = function (t) {
   t.check('"category X" form', run('buy milk category groceries').category, 'Groceries');
   t.check('mid-sentence bare match is not a category', run('call work about the invoice').category, '');
   t.check('mid-sentence match stays in the name', run('call work about the invoice').name, 'Call work about the invoice');
-  t.check('unknown category is never invented', run('buy milk in sundries').category, '');
-  t.check('unknown category stays in the name', run('buy milk in sundries').name, 'Buy milk in sundries');
-  t.check('no categories configured', parse('buy milk in groceries', { now: NOW, categories: [] }).category, '');
+  t.check('a marked unknown is invented', run('buy milk in sundries').category, 'Sundries');
+  t.check('and is taken out of the name', run('buy milk in sundries').name, 'Buy milk');
+  t.check('invented with nothing configured', parse('buy milk in groceries', { now: NOW, categories: [] }).category, 'Groceries');
 
   /* Punctuation in a category name is inaudible, so it cannot be required.
      "Anniversary / Birthday" is a real category from the app this was built
@@ -156,12 +156,73 @@ module.exports = function (t) {
     punct('call mum in anniversary / birthday').category, 'Anniversary / Birthday');
   t.check('trailing bare match still works with punctuation',
     punct('ring the caterers anniversary birthday').category, 'Anniversary / Birthday');
-  t.check('still refuses to invent one',
-    punct('buy milk in groceries').category, '');
+  t.check('an unrelated marked name is invented alongside',
+    punct('buy milk in groceries').category, 'Groceries');
+  /* And a partial is not a new category either, which is the whole reason
+     inventing is guarded: a mishearing of "Anniversary / Birthday" would
+     otherwise plant an "Anniversary" directly beside it. */
   t.check('partial match is not a match',
     punct('call mum in anniversary').category, '');
   t.check('and that partial stays in the name',
     punct('call mum in anniversary').name, 'Call mum in anniversary');
+
+  /* A category is a namespace — it shows in the drawer, the picker and every
+     later match — and recognition is lossy, so one may only be created from a
+     form the speaker plainly marked as a category. Everything in these two
+     sections is the line between the two. */
+  t.section('categories that are invented');
+  [
+    ['buy milk in sundries', 'in X'],
+    ['buy milk under sundries', 'under X'],
+    ['buy milk category sundries', 'category X'],
+    ['buy milk list sundries', 'list X'],
+    ['buy milk sundries category', 'X category'],
+    ['buy milk sundries list', 'X list']
+  ].forEach(([said, form]) => {
+    t.check('"' + form + '" creates it', run(said).category, 'Sundries');
+    t.check('"' + form + '" leaves the name clean', run(said).name, 'Buy milk');
+  });
+
+  t.check('a prefixed name runs to the end of the sentence',
+    run('buy milk in home improvement').category, 'Home Improvement');
+  t.check('and the task keeps the rest',
+    run('buy milk in home improvement').name, 'Buy milk');
+  t.check('capped at three words',
+    run('buy milk in deep sea diving lessons').category, 'Deep Sea Diving');
+
+  /* A marker at the front has nothing but the task after it, so running to
+     the end would swallow the whole sentence. */
+  t.check('a leading marker takes one word only',
+    run('in groceries buy milk').category, 'Groceries');
+  t.check('and leaves the task behind', run('in groceries buy milk').name, 'Buy milk');
+
+  /* Only the near edge of a suffixed name is knowable — reaching back through
+     "get a haircut ... sundries category" would invent "Haircut Sundries". */
+  t.check('a suffixed name takes one word only',
+    run('get a haircut sundries category').category, 'Sundries');
+  t.check('and leaves the task behind',
+    run('get a haircut sundries category').name, 'Get a haircut');
+
+  t.section('categories that are still not invented');
+  t.check('a bare trailing word never creates one',
+    run('email the invoice sundries').category, '');
+  t.check('and stays in the name',
+    run('email the invoice sundries').name, 'Email the invoice sundries');
+  t.check('an existing category wins over creating one',
+    run('buy milk in work').category, 'Work');
+  t.check('a filler after the marker is not a name',
+    run('call the plumber in the morning').category, '');
+  t.check('and that phrase is still read as a time',
+    run('call the plumber in the morning').time, '09:00');
+  t.check('a month is a date the parser missed, not a category',
+    run('buy milk in march').category, '');
+  t.check('a number is never a category', run('call mum in 5').category, '');
+  t.check('a claimed date phrase is out of reach',
+    run('review in 3 days').category, '');
+  t.check('and that date still lands', run('review in 3 days').date, '2026-08-22');
+  t.check('a category with no task is not a category',
+    run('in sundries').category, '');
+  t.check('it is the task', run('in sundries').name, 'Sundries');
 
   /* Verbatim transcripts captured from Vosk on a moto g71, not invented. The
      speaker said "8 AM" every time; the engine returned "eighty m" every time,
@@ -191,6 +252,28 @@ module.exports = function (t) {
     t.check('trailing "categories" is absorbed', c.category, 'Hygiene');
     t.check('and does not litter the name', c.name, 'Get haircut');
     t.check('time', c.time, '08:00');
+  }
+  {
+    /* Captured on the phone 2026-08-21, first attempt. The engine clipped the
+       opening "buy milk" off "buy milk tomorrow at eight in groceries" — the
+       mic opens a beat after the FAB is tapped — leaving nothing but a date, a
+       time and a marked category. Inventing it would leave the task with no
+       name at all, so the word becomes the name instead: a task called
+       "Groceries" is recoverable, a nameless one is not. */
+    const clipped = parse('tomorrow at eight in groceries',
+      { now: NOW, categories: ['Anniversary / Birthday'] });
+    t.check('a clipped transcript keeps a nameable task', clipped.name, 'Groceries');
+    t.check('rather than a category with no task', clipped.category, '');
+    t.check('and the date survives the clipping', clipped.date, '2026-08-20');
+    t.check('and so does the time', clipped.time, '08:00');
+  }
+  {
+    // The same shape, for a category that does not exist yet.
+    const d = vosk('get a haircut tomorrow eighty m. repeat every three weeks sundries category');
+    t.check('a real transcript can create one', d.category, 'Sundries');
+    t.check('without disturbing the rest', d.name, 'Get a haircut');
+    t.check('or the time', d.time, '08:00');
+    t.check('or the rule', rule(d.recurrence), '3 week');
   }
 
   /* Saying "AM" is the unreliable part on this device — the engine returned
